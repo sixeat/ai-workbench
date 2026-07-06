@@ -1,0 +1,543 @@
+const { randomUUID } = require('crypto');
+const {
+  addTaskLog,
+  createTask,
+  getTask,
+  getTaskForUser,
+  insertAsset,
+  linkTaskAsset,
+  listTaskAssets,
+  updateTask,
+} = require('../db.cjs');
+const {
+  filterVideoBodyByCapabilities,
+  getModelCapabilities,
+} = require('../modelCapabilities.cjs');
+const {
+  publicErrorMessage,
+  safeTaskError,
+  safeUpstreamErrorData,
+  safeUpstreamTaskError,
+} = require('../httpErrors.cjs');
+const {
+  assertAssetStorageQuota,
+  toExposedQuotaError,
+} = require('./assetQuotaService.cjs');
+const { fetchPublicUrl } = require('./networkGuard.cjs');
+const { getVideoProviderAdapter } = require('./videoProviderAdapters.cjs');
+const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
+
+function createVideoTask(userId, body, status = 'queued') {
+  return createTask({
+    id: randomUUID(),
+    userId,
+    nodeType: 'video',
+    providerId: body.providerId || 'seedance',
+    model: body.model,
+    status,
+    retryOf: body.retryOf || null,
+    input: {
+      providerId: body.providerId || 'seedance',
+      apiKeyId: body.apiKeyId || '',
+      baseUrl: body.apiKeyId ? '' : body.baseUrl || '',
+      publicBaseUrl: body.publicBaseUrl || '',
+      model: body.model,
+      mode: body.mode,
+      text: body.text,
+      content: Array.isArray(body.content) ? body.content : undefined,
+      prompt: body.prompt,
+      ratio: body.ratio,
+      resolution: body.resolution,
+      duration: body.duration,
+      images: body.images,
+      referenceImages: body.referenceImages,
+      reference_images: body.reference_images,
+      referenceVideos: body.referenceVideos,
+      reference_videos: body.reference_videos,
+      referenceAudios: body.referenceAudios,
+      reference_audios: body.reference_audios,
+      referenceVideoUrl: body.referenceVideoUrl,
+      referenceAudioUrl: body.referenceAudioUrl,
+      aspectRatio: body.aspectRatio,
+      watermark: body.watermark,
+      promptExtend: body.promptExtend,
+      prompt_extend: body.prompt_extend,
+      seed: body.seed,
+      negativePrompt: body.negativePrompt,
+      negative_prompt: body.negative_prompt,
+      upstreamTaskIds: Array.isArray(body.upstreamTaskIds) ? body.upstreamTaskIds : [],
+      imageCount: Array.isArray(body.images) ? body.images.length : 0,
+      hasReferenceVideo: Boolean(body.referenceVideoUrl),
+      hasReferenceAudio: Boolean(body.referenceAudioUrl),
+      generateAudio: Boolean(body.generateAudio ?? body.generate_audio),
+      generate_audio: Boolean(body.generateAudio ?? body.generate_audio),
+    },
+  });
+}
+
+function taskWasCancelled(taskId) {
+  return getTask(taskId)?.status === 'cancelled';
+}
+
+function elapsedSinceCreated(task) {
+  const createdAt = new Date(task?.createdAt || Date.now()).getTime();
+  return Math.max(0, Date.now() - createdAt);
+}
+
+async function saveGeneratedVideo({ assetStorage, userId, taskId, videoUrl, prompt, model, providerId, uploadLimits = {} }) {
+  if (!assetStorage || !videoUrl) return null;
+  const existing = listTaskAssets(taskId).find((asset) => asset.type === 'video');
+  if (existing) return existing;
+
+  const response = await fetchPublicUrl(videoUrl);
+  if (!response.ok) {
+    throw new Error(`Could not download generated video: ${response.status}`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const limitError = assertAssetStorageQuota({ userId, sizeBytes: buffer.length, uploadLimits });
+  if (limitError) throw toExposedQuotaError(limitError);
+
+  const stored = await assetStorage.save(buffer, {
+    type: 'video',
+    mime: response.headers.get('content-type') || 'video/mp4',
+    prompt,
+    model,
+    providerId,
+  });
+  const asset = insertAsset({
+    ...stored,
+    userId,
+  });
+  linkTaskAsset(taskId, asset.id);
+  return asset;
+}
+
+function createVideoGenerationService({
+  assetStorage,
+  joinUrl,
+  publicAsset,
+  proxyRequest,
+  resolveApiCredentials,
+  uploadLimits = {},
+}) {
+  async function runVideoTask({ req, userId, body = {}, secrets, task }) {
+    const startedAt = Date.now();
+    const activeTask = task || createVideoTask(userId, {
+      ...body,
+      publicBaseUrl: body.publicBaseUrl || getPublicBaseUrl(req),
+    }, 'running');
+    const taskBody = {
+      ...(activeTask.input || {}),
+      ...body,
+      publicBaseUrl: body.publicBaseUrl || activeTask.input?.publicBaseUrl || getPublicBaseUrl(req),
+    };
+    const workerReq = req || { headers: {}, publicBaseUrl: taskBody.publicBaseUrl };
+
+    try {
+      if (taskWasCancelled(activeTask.id)) {
+        addTaskLog(activeTask.id, {
+          level: 'warn',
+          event: 'cancelled_before_start',
+          message: 'Task was cancelled before the video worker started.',
+        });
+        return { status: 409, data: { error: 'Task was cancelled.' } };
+      }
+
+      const requestedProviderId = taskBody.providerId || 'seedance';
+      const adapter = getVideoProviderAdapter(requestedProviderId);
+      const { baseUrl, apiKey, providerId } = await resolveApiCredentials({
+        userId,
+        body: {
+          ...taskBody,
+          providerId: requestedProviderId,
+          baseUrl: taskBody.baseUrl || adapter.defaultBaseUrl(secrets),
+        },
+        secrets: {
+          ...secrets,
+          baseUrl: adapter.defaultBaseUrl(secrets),
+        },
+      });
+
+      if (!apiKey) {
+        updateTask(activeTask.id, {
+          status: 'failed',
+          error: { message: 'API key is required' },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 400, data: { error: 'API key is required' } };
+      }
+
+      const resolvedAdapter = getVideoProviderAdapter(providerId);
+      const arkBody = resolvedAdapter.buildCapabilityBody({ body: taskBody, req: workerReq });
+
+      if (!arkBody.model) {
+        updateTask(activeTask.id, {
+          status: 'failed',
+          error: { message: 'model is required' },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 400, data: { error: 'model is required' } };
+      }
+      if (!arkBody.content.length) {
+        updateTask(activeTask.id, {
+          status: 'failed',
+          error: { message: 'content is required' },
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: 400, data: { error: 'content is required' } };
+      }
+
+      const capabilities = getModelCapabilities(providerId, arkBody.model);
+      const capabilityResult = filterVideoBodyByCapabilities(arkBody, capabilities);
+
+      if (!capabilityResult.ok) {
+        updateTask(activeTask.id, {
+          status: 'failed',
+          error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
+          durationMs: Date.now() - startedAt,
+        });
+        return {
+          status: 400,
+          data: { error: capabilityResult.error, warnings: capabilityResult.warnings },
+        };
+      }
+
+      const request = resolvedAdapter.buildCreateRequest({
+        originalBody: taskBody,
+        body: capabilityResult.body,
+        req: workerReq,
+        apiKey,
+      });
+      const result = await proxyRequest(joinUrl(baseUrl, request.endpoint), {
+        method: 'POST',
+        headers: request.headers,
+        body: request.body,
+      });
+
+      if (result.status >= 400) {
+        const upstreamError = safeUpstreamTaskError(result, 'Video generation upstream request failed.');
+        console.error('/api/videos upstream error:', {
+          status: result.status,
+          statusText: result.statusText,
+          error: upstreamError,
+        });
+        updateTask(activeTask.id, {
+          status: 'failed',
+          error: upstreamError,
+          durationMs: Date.now() - startedAt,
+        });
+        return { status: result.status, data: safeUpstreamErrorData(result, 'Video generation upstream request failed.') };
+      }
+
+      const output = {
+        providerId,
+        credential: {
+          apiKeyId: taskBody.apiKeyId || '',
+        },
+        request: {
+          model: arkBody.model,
+          mode: taskBody.mode || '',
+          ratio: arkBody.ratio,
+          resolution: capabilityResult.body.resolution,
+          duration: arkBody.duration,
+          generateAudio: capabilityResult.body.generate_audio,
+          watermark: arkBody.watermark,
+          contentCount: arkBody.content.length,
+        },
+        upstream: resolvedAdapter.summarizeUpstream(result.data),
+      };
+
+      addTaskLog(activeTask.id, {
+        event: 'upstream_video_submitted',
+        message: 'Video task submitted to upstream provider.',
+        data: {
+          upstreamTaskId: output.upstream?.taskId || '',
+          upstreamStatus: output.upstream?.status || '',
+          providerId,
+          model: arkBody.model,
+        },
+      });
+
+      if (taskWasCancelled(activeTask.id)) {
+        return { status: 409, data: { error: 'Task was cancelled.' } };
+      }
+
+      updateTask(activeTask.id, {
+        status: 'running',
+        output,
+        error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
+        durationMs: Date.now() - startedAt,
+      });
+
+      return {
+        status: 202,
+        data: {
+          taskId: activeTask.id,
+          task: getTask(activeTask.id),
+          data: result.data,
+          request: output.request,
+          warnings: capabilityResult.warnings,
+        },
+      };
+    } catch (error) {
+      console.error('/api/videos task error:', error);
+      if (activeTask && !taskWasCancelled(activeTask.id)) {
+        updateTask(activeTask.id, {
+          status: 'failed',
+          error: safeTaskError(error, 'Video generation failed.'),
+          durationMs: Date.now() - startedAt,
+        });
+      }
+      return {
+        status: error.status || 500,
+        data: { error: publicErrorMessage(error, 'Video generation failed.') },
+      };
+    }
+  }
+
+  async function generateVideo({ req, userId, body, secrets }) {
+    return runVideoTask({
+      req,
+      userId,
+      body,
+      secrets,
+      task: createVideoTask(userId, {
+        ...body,
+        publicBaseUrl: getPublicBaseUrl(req),
+      }, 'running'),
+    });
+  }
+
+  async function getVideoTask({ taskId, userId, query, secrets }) {
+    const localTask = getTaskForUser(taskId, userId);
+    const localOutput = localTask?.output || {};
+    const upstreamTaskId = localTask?.nodeType === 'video'
+      ? localOutput?.upstream?.taskId || query.upstreamTaskId || taskId
+      : taskId;
+    const providerId = query.providerId || localTask?.providerId || localOutput?.providerId || 'seedance';
+    const adapter = getVideoProviderAdapter(providerId);
+    const body = {
+      apiKeyId: query.apiKeyId || localOutput?.credential?.apiKeyId,
+      baseUrl: adapter.defaultBaseUrl(secrets),
+      providerId,
+    };
+    const { baseUrl, apiKey } = await resolveApiCredentials({
+      userId,
+      body,
+      secrets: {
+        ...secrets,
+        baseUrl: body.baseUrl,
+      },
+    });
+    if (!apiKey) return { status: 400, data: { error: 'API key is required' } };
+
+    const request = adapter.buildQueryRequest({
+      taskId: upstreamTaskId,
+      apiKey,
+    });
+    const result = await proxyRequest(joinUrl(baseUrl, request.endpoint), {
+      method: 'GET',
+      headers: request.headers,
+    });
+
+    if (result.status >= 400) {
+      if (localTask?.nodeType === 'video') {
+        const durationMs = elapsedSinceCreated(localTask);
+        const taskError = safeUpstreamTaskError(result, 'Video task lookup upstream request failed.');
+        updateTask(localTask.id, {
+          status: 'failed',
+          output: localTask.output || {},
+          error: taskError,
+          durationMs,
+        });
+        if (localTask.status !== 'failed') {
+          addTaskLog(localTask.id, {
+            level: 'error',
+            event: 'upstream_video_lookup_failed',
+            message: taskError.message || 'Video task lookup upstream request failed.',
+            data: {
+              durationMs,
+              upstreamTaskId,
+              upstreamStatus: result.status,
+              providerId,
+              model: localTask.model,
+              error: taskError,
+            },
+          });
+        }
+      }
+      return { status: result.status, data: safeUpstreamErrorData(result, 'Video task lookup upstream request failed.') };
+    }
+
+    if (!localTask || localTask.nodeType !== 'video') {
+      return { status: result.status, data: result.data };
+    }
+
+    const upstream = adapter.summarizeUpstream(result.data);
+    const normalizedStatus = adapter.normalizeStatus(result.data);
+    const nextOutput = {
+      ...(localTask.output || {}),
+      upstream: {
+        ...(localTask.output?.upstream || {}),
+        ...upstream,
+        rawStatus: upstream.status || '',
+      },
+    };
+
+    if (normalizedStatus === 'succeeded') {
+      const videoUrl = adapter.extractVideoUrl(result.data);
+      if (!videoUrl) {
+        const durationMs = elapsedSinceCreated(localTask);
+        const error = { message: 'Video task succeeded upstream, but no video URL was found.' };
+        const updated = updateTask(localTask.id, {
+          status: 'failed',
+          output: nextOutput,
+          error,
+          durationMs,
+        });
+        if (localTask.status !== 'failed') {
+          addTaskLog(localTask.id, {
+            level: 'error',
+            event: 'upstream_video_missing_url',
+            message: error.message,
+            data: {
+              durationMs,
+              upstreamTaskId,
+              upstreamStatus: upstream.status || '',
+              providerId,
+              model: localTask.model,
+              error,
+            },
+          });
+        }
+        return { status: 502, data: { task: updated, data: result.data, error: updated.error } };
+      }
+
+      let asset;
+      try {
+        asset = await saveGeneratedVideo({
+          assetStorage,
+          userId,
+          taskId: localTask.id,
+          videoUrl,
+          prompt: localTask.input?.prompt || '',
+          model: localTask.model,
+          providerId,
+          uploadLimits,
+        });
+      } catch (error) {
+        const durationMs = elapsedSinceCreated(localTask);
+        const taskError = safeTaskError(error, 'Video asset save failed.');
+        const updated = updateTask(localTask.id, {
+          status: 'failed',
+          output: nextOutput,
+          error: taskError,
+          durationMs,
+        });
+        if (localTask.status !== 'failed') {
+          addTaskLog(localTask.id, {
+            level: 'error',
+            event: 'upstream_video_asset_save_failed',
+            message: taskError.message,
+            data: {
+              durationMs,
+              upstreamTaskId,
+              upstreamStatus: upstream.status || '',
+              providerId,
+              model: localTask.model,
+              error: taskError,
+            },
+          });
+        }
+        return {
+          status: error.status || 500,
+          data: {
+            task: updated,
+            data: result.data,
+            error: updated.error,
+          },
+        };
+      }
+      const output = {
+        ...nextOutput,
+        video: asset ? publicAsset(asset) : null,
+      };
+      const updated = updateTask(localTask.id, {
+        status: 'succeeded',
+        output,
+        error: null,
+        durationMs: elapsedSinceCreated(localTask),
+      });
+      if (localTask.status !== 'succeeded') {
+        addTaskLog(localTask.id, {
+          event: 'upstream_video_succeeded',
+          message: 'Video task completed upstream and the asset was saved.',
+          data: {
+            durationMs: updated.durationMs,
+            upstreamTaskId,
+            upstreamStatus: upstream.status || '',
+            providerId,
+            model: localTask.model,
+            assetId: asset?.id || null,
+          },
+        });
+      }
+      return { status: result.status, data: { task: updated, data: result.data, asset: output.video } };
+    }
+
+    if (normalizedStatus === 'failed' || normalizedStatus === 'cancelled') {
+      const durationMs = elapsedSinceCreated(localTask);
+      const error = normalizedStatus === 'failed'
+        ? {
+            ...safeUpstreamTaskError({
+              data: result.data,
+              headers: result.headers,
+              status: null,
+              statusText: '',
+            }, 'Video task failed upstream.'),
+            upstreamTaskStatus: upstream.status || '',
+          }
+        : { message: 'Video task cancelled upstream.', upstreamTaskStatus: upstream.status || '' };
+      const updated = updateTask(localTask.id, {
+        status: normalizedStatus,
+        output: nextOutput,
+        error,
+        durationMs,
+      });
+      if (localTask.status !== normalizedStatus) {
+        addTaskLog(localTask.id, {
+          level: normalizedStatus === 'failed' ? 'error' : 'warn',
+          event: normalizedStatus === 'failed' ? 'upstream_video_failed' : 'upstream_video_cancelled',
+          message: error.message,
+          data: {
+            durationMs,
+            upstreamTaskId,
+            upstreamStatus: upstream.status || '',
+            providerId,
+            model: localTask.model,
+            error,
+          },
+        });
+      }
+      return { status: result.status, data: { task: updated, data: result.data } };
+    }
+
+    const updated = updateTask(localTask.id, {
+      status: 'running',
+      output: nextOutput,
+    });
+    return { status: result.status, data: { task: updated, data: result.data } };
+  }
+
+  return {
+    createVideoTask,
+    generateVideo,
+    getVideoTask,
+    runVideoTask,
+  };
+}
+
+module.exports = {
+  createVideoGenerationService,
+};
