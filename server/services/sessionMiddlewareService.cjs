@@ -4,11 +4,7 @@ const {
   hashSessionToken,
   parseCookies,
 } = require('../auth.cjs');
-const {
-  deleteExpiredSessions,
-  deleteSessionByTokenHash,
-  getSessionByTokenHash,
-} = require('../db.cjs');
+const { authRepository: defaultAuthRepository } = require('../repositories/authRepository.cjs');
 
 function isSecureRequest(req) {
   return Boolean(req.secure || req.headers?.['x-forwarded-proto'] === 'https');
@@ -32,9 +28,10 @@ function createClearCookie(req, sessionCookieOptions, clearCookie = clearSession
 function createSessionMiddleware(options = {}) {
   const {
     clearCookie = clearSessionCookie,
-    deleteExpired = deleteExpiredSessions,
-    deleteSession = deleteSessionByTokenHash,
-    getSession = getSessionByTokenHash,
+    authRepository = defaultAuthRepository,
+    deleteExpired = authRepository.deleteExpiredSessions,
+    deleteSession = authRepository.deleteSessionByTokenHash,
+    getSession = authRepository.getSessionByTokenHash,
     hashToken = hashSessionToken,
     now = () => Date.now(),
     parseCookieHeader = parseCookies,

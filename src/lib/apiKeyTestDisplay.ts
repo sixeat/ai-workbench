@@ -104,10 +104,27 @@ function videoDurationLabel(video: Record<string, unknown>, videoGeneration: unk
 }
 
 function videoReferenceImageLabel(video: Record<string, unknown>, videoGeneration: unknown): string {
+  return videoReferenceMediaLabel(video, videoGeneration, 'supportsReferenceImage', 'maxReferenceImages', '张');
+}
+
+function videoReferenceMediaLabel(
+  video: Record<string, unknown>,
+  videoGeneration: unknown,
+  supportKey: string,
+  maxKey: string,
+  unit: string
+): string {
   if (!videoGeneration) return '未声明';
-  if (!video.supportsReferenceImage) return '不支持';
-  const maxReferenceImages = Number(video.maxReferenceImages || 0);
-  return maxReferenceImages > 0 ? `支持，最多 ${maxReferenceImages} 张` : '支持';
+  if (!video[supportKey]) return '不支持';
+  const max = Number(video[maxKey] || 0);
+  return max > 0 ? `支持，最多 ${max} ${unit}` : '支持，未声明上限';
+}
+
+function rangeLabel(min: unknown, max: unknown, suffix: string): string {
+  const minValue = Number(min || 0);
+  const maxValue = Number(max || 0);
+  if (!minValue && !maxValue) return '未声明';
+  return `${minValue || 0}-${maxValue || '不限'}${suffix}`;
 }
 
 export function formatApiKeyTestReason(reason?: string): string {
@@ -202,10 +219,9 @@ export function summarizeApiKeyTestLimits(capabilities: CapabilityMap): ApiKeyTe
     { label: '视频模式', value: hasVideo ? listLabel(video.modes) : '未声明' },
     { label: '视频时长', value: videoDurationLabel(video, hasVideo) },
     { label: '视频参考图', value: videoReferenceImageLabel(video, hasVideo) },
-    { label: '视频参考视频数量', value: hasVideo ? numberLabel(video.maxReferenceVideos, ' 个') : '未声明' },
-    { label: '视频参考音频数量', value: hasVideo ? numberLabel(video.maxReferenceAudios, ' 个') : '未声明' },
-    { label: '视频参考视频', value: scopedBoolLabel(video.supportsReferenceVideo, hasVideo) },
-    { label: '视频参考音频', value: scopedBoolLabel(video.supportsReferenceAudio, hasVideo) },
+    { label: '视频参考视频', value: videoReferenceMediaLabel(video, hasVideo, 'supportsReferenceVideo', 'maxReferenceVideos', '个') },
+    { label: '视频参考音频', value: videoReferenceMediaLabel(video, hasVideo, 'supportsReferenceAudio', 'maxReferenceAudios', '个') },
+    { label: '视频参考素材总数', value: hasVideo ? numberLabel(video.maxMediaFiles, ' 个') : '未声明' },
     { label: '视频生成音频', value: scopedBoolLabel(video.supportsAudioGeneration, hasVideo) },
     { label: '视频智能改写', value: scopedBoolLabel(video.supportsPromptExtend, hasVideo) },
     { label: '视频 Seed', value: scopedBoolLabel(video.supportsSeed, hasVideo) },
@@ -218,6 +234,20 @@ export function summarizeApiKeyTestLimits(capabilities: CapabilityMap): ApiKeyTe
     { label: '视频分辨率', value: hasVideo ? listLabel(video.resolutions) : '未声明' },
     { label: '视频任务类型', value: hasVideo ? listLabel(video.taskTypes) : '未声明' },
     { label: '视频媒体类型', value: hasVideo ? listLabel(video.mediaTypes) : '未声明' },
+    { label: '视频提示词长度', value: hasVideo ? numberLabel(video.promptMaxChars, ' 字') : '未声明' },
+    { label: '视频反向词长度', value: hasVideo ? numberLabel(video.negativePromptMaxChars, ' 字') : '未声明' },
+    { label: '视频自动音频', value: scopedBoolLabel(video.autoAudioByDefault, hasVideo) },
+    { label: '参考音频格式', value: hasVideo ? listLabel(video.audioFormats) : '未声明' },
+    { label: '参考音频时长', value: hasVideo ? rangeLabel(video.audioDurationMin, video.audioDurationMax, ' 秒') : '未声明' },
+    { label: '参考音频大小', value: hasVideo ? numberLabel(video.audioMaxFileMb, ' MB') : '未声明' },
+    { label: '参考图片格式', value: hasVideo ? listLabel(video.imageFormats) : '未声明' },
+    { label: '参考图片边长', value: hasVideo ? rangeLabel(video.imageMinSide, video.imageMaxSide, ' px') : '未声明' },
+    { label: '参考图片大小', value: hasVideo ? numberLabel(video.imageMaxFileMb, ' MB') : '未声明' },
+    { label: '参考视频格式', value: hasVideo ? listLabel(video.videoFormats) : '未声明' },
+    { label: '参考视频大小', value: hasVideo ? numberLabel(video.videoMaxFileMb, ' MB') : '未声明' },
+    { label: '视频输出格式', value: hasVideo ? listLabel(video.outputFormats) : '未声明' },
+    { label: '结果链接有效期', value: hasVideo ? numberLabel(video.resultUrlTtlHours, ' 小时') : '未声明' },
+    { label: '查询频控', value: hasVideo ? numberLabel(video.queryRps, ' RPS') : '未声明' },
   ];
 
   return rows.filter((row) => row.value !== '未声明');

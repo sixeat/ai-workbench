@@ -163,7 +163,7 @@ export function FlowCanvas() {
             button: {
               backgroundColor: '#1a1a1e',
               color: '#e2e8f0',
-              borderColor: '#2a2a2e'
+              borderColor: 'var(--line-soft)'
             }
           } as any}
         />
@@ -175,7 +175,7 @@ export function FlowCanvas() {
           maskColor="rgba(15, 15, 17, 0.8)"
           style={{
             backgroundColor: '#1a1a1e',
-            border: '1px solid #2a2a2e',
+            border: '1px solid var(--line-soft)',
             borderRadius: '8px'
           }}
         />

@@ -1,11 +1,11 @@
 {
   "name": "ai-workbench",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run dev:proxy\" \"npm run dev:web\"",
-    "dev:web": "vite",
+    "dev:web": "vite --host 127.0.0.1",
     "dev:proxy": "node server/index.cjs",
     "build": "tsc -b && vite build",
     "check:deploy": "node server/deploymentCheck.cjs",
@@ -14,7 +14,15 @@
     "test": "node --test --import tsx \"src/**/*.test.ts\" \"server/**/*.test.cjs\"",
     "preview": "vite preview",
     "start": "node server/index.cjs",
-    "start:server": "npm run check:deploy && node server/index.cjs"
+    "start:api": "node server/api.cjs",
+    "start:asset-service": "node server/assetService.cjs",
+    "start:auth-service": "node server/authService.cjs",
+    "start:all": "node server/index.cjs",
+    "start:model-service": "node server/modelService.cjs",
+    "start:server": "npm run check:deploy && node server/index.cjs",
+    "start:worker": "node server/worker.cjs",
+    "start:worker-service": "node server/workerService.cjs",
+    "start:workflow-service": "node server/workflowService.cjs"
   },
   "dependencies": {
     "@tailwindcss/postcss": "^4.3.1",

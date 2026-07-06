@@ -196,21 +196,49 @@ test('task service cancels queued tasks and soft-cancels running tasks', () => {
   const queued = createTask({
     userId: user.id,
     nodeType: 'image',
+    providerId: 'openai-compatible',
+    model: 'gpt-image-test',
     status: 'queued',
-    input: { prompt: 'queued' },
+    input: {
+      prompt: 'queued',
+      upstreamTaskIds: ['queued-upstream-input'],
+    },
   });
   const running = createTask({
     userId: user.id,
-    nodeType: 'image',
+    nodeType: 'video',
+    providerId: 'seedance',
+    model: 'seedance-test',
     status: 'running',
-    input: { prompt: 'running' },
+    input: {
+      prompt: 'running',
+      sourceTaskId: 'running-source-task',
+    },
+    output: {
+      upstream: { taskId: 'running-upstream-output' },
+    },
   });
 
-  assert.equal(taskService.cancelTask(queued.id, user.id).status, 'cancelled');
+  const cancelledQueued = taskService.cancelTask(queued.id, user.id);
   const cancelledRunning = taskService.cancelTask(running.id, user.id);
+  const queuedCancelLog = cancelledQueued.logs.find((log) => log.event === 'cancel_requested');
+  const runningCancelLog = cancelledRunning.logs.find((log) => log.event === 'cancel_requested');
+
+  assert.equal(cancelledQueued.status, 'cancelled');
   assert.equal(cancelledRunning.status, 'cancelled');
   assert.equal(cancelledRunning.error.message, 'Cancellation requested while task was running.');
-  assert.equal(cancelledRunning.logs.some((log) => log.event === 'cancel_requested'), true);
+  assert.equal(queuedCancelLog.data.status, 'queued');
+  assert.equal(queuedCancelLog.data.nodeType, 'image');
+  assert.equal(queuedCancelLog.data.providerId, 'openai-compatible');
+  assert.equal(queuedCancelLog.data.model, 'gpt-image-test');
+  assert.equal(typeof queuedCancelLog.data.durationMs, 'number');
+  assert.deepEqual(queuedCancelLog.data.upstreamTaskIds, ['queued-upstream-input']);
+  assert.equal(runningCancelLog.data.status, 'running');
+  assert.equal(runningCancelLog.data.nodeType, 'video');
+  assert.equal(runningCancelLog.data.providerId, 'seedance');
+  assert.equal(runningCancelLog.data.model, 'seedance-test');
+  assert.equal(typeof runningCancelLog.data.durationMs, 'number');
+  assert.deepEqual(runningCancelLog.data.upstreamTaskIds, ['running-source-task', 'running-upstream-output']);
   assert.equal(taskService.cancelTask(queued.id, 'missing-user'), null);
 });
 

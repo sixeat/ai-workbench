@@ -94,6 +94,7 @@ test('resolveEmailCodeConfig keeps email and IP rate limits mode-aware', () => {
     windowMs: 60 * 60 * 1000,
     emailLimit: 3,
     ipLimit: 20,
+    maxVerifyAttempts: 5,
   });
 
   assert.deepEqual(resolveEmailCodeConfig({}, 'local'), {
@@ -101,13 +102,23 @@ test('resolveEmailCodeConfig keeps email and IP rate limits mode-aware', () => {
     windowMs: 60 * 60 * 1000,
     emailLimit: 50,
     ipLimit: 200,
+    maxVerifyAttempts: 5,
   });
+
+  assert.equal(resolveEmailCodeConfig({
+    WORKBENCH_EMAIL_CODE_MAX_VERIFY_ATTEMPTS: '7',
+  }, 'server').maxVerifyAttempts, 7);
+
+  assert.equal(resolveEmailCodeConfig({
+    WORKBENCH_EMAIL_CODE_MAX_VERIFY_ATTEMPTS: '0',
+  }, 'server').maxVerifyAttempts, 5);
 });
 
 test('resolveTaskQueueConfig keeps conservative defaults', () => {
   assert.deepEqual(resolveTaskQueueConfig({}), {
     textConcurrency: 2,
     generationConcurrency: 2,
+    pollIntervalMs: 1000,
   });
 });
 
@@ -115,9 +126,11 @@ test('resolveTaskQueueConfig supports separate text and generation concurrency o
   assert.deepEqual(resolveTaskQueueConfig({
     WORKBENCH_TEXT_QUEUE_CONCURRENCY: '5',
     WORKBENCH_GENERATION_QUEUE_CONCURRENCY: '3',
+    WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS: '250',
   }), {
     textConcurrency: 5,
     generationConcurrency: 3,
+    pollIntervalMs: 250,
   });
 });
 
@@ -125,9 +138,11 @@ test('resolveTaskQueueConfig ignores invalid concurrency values', () => {
   assert.deepEqual(resolveTaskQueueConfig({
     WORKBENCH_TEXT_QUEUE_CONCURRENCY: '0',
     WORKBENCH_GENERATION_QUEUE_CONCURRENCY: '1.5',
+    WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS: '-1',
   }), {
     textConcurrency: 2,
     generationConcurrency: 2,
+    pollIntervalMs: 1000,
   });
 });
 
@@ -145,6 +160,7 @@ test('resolveRequestConfig preserves key server mode defaults', () => {
   assert.deepEqual(config.taskQueues, {
     textConcurrency: 2,
     generationConcurrency: 2,
+    pollIntervalMs: 1000,
   });
   assert.equal(config.trustForwardedFor, false);
 });
@@ -162,6 +178,7 @@ test('resolveRequestConfig supports explicit overrides without changing legacy b
     WORKBENCH_SESSION_TTL_DAYS: '30',
     WORKBENCH_TEXT_QUEUE_CONCURRENCY: '6',
     WORKBENCH_GENERATION_QUEUE_CONCURRENCY: '4',
+    WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS: '300',
     WORKBENCH_TRUST_PROXY: 'true',
     WORKBENCH_UPLOAD_RATE_LIMIT: '9',
   }, 'local');
@@ -179,6 +196,7 @@ test('resolveRequestConfig supports explicit overrides without changing legacy b
   assert.deepEqual(config.taskQueues, {
     textConcurrency: 6,
     generationConcurrency: 4,
+    pollIntervalMs: 300,
   });
   assert.equal(config.trustForwardedFor, true);
 });

@@ -71,6 +71,7 @@ test('workflow storage falls back to local storage only for network failures', a
         savedLocally.push(project);
       },
     },
+    storageMode: 'local',
   });
 
   try {
@@ -79,6 +80,42 @@ test('workflow storage falls back to local storage only for network failures', a
     assert.equal(result.storage, 'local');
     assert.match(result.fallbackReason || '', /Failed to fetch/);
     assert.deepEqual(savedLocally, [workflow]);
+  } finally {
+    restoreAdapters();
+  }
+});
+
+test('workflow storage does not fall back to IndexedDB in server mode', async () => {
+  const workflow = makeWorkflow('server-network-error');
+  let localListCount = 0;
+  let localSaveCount = 0;
+  const restoreAdapters = configureWorkflowDbAdaptersForTests({
+    remoteApi: {
+      list: async () => {
+        throw new TypeError('Failed to fetch');
+      },
+      save: async () => {
+        throw new TypeError('Failed to fetch');
+      },
+    },
+    localStore: {
+      canUse: () => true,
+      list: async () => {
+        localListCount += 1;
+        return [workflow];
+      },
+      save: async () => {
+        localSaveCount += 1;
+      },
+    },
+    storageMode: 'server',
+  });
+
+  try {
+    await assert.rejects(() => listWorkflowPage(), /Failed to fetch/);
+    await assert.rejects(() => saveWorkflow(workflow), /Failed to fetch/);
+    assert.equal(localListCount, 0);
+    assert.equal(localSaveCount, 0);
   } finally {
     restoreAdapters();
   }
@@ -130,6 +167,7 @@ test('workflow storage fallback paginates and searches local workflows', async (
       canUse: () => true,
       list: async () => [alpha, beta, gamma],
     },
+    storageMode: 'local',
   });
 
   try {
@@ -246,6 +284,7 @@ test('workflow version pagination returns an empty local page on network fallbac
     localStore: {
       canUse: () => true,
     },
+    storageMode: 'local',
   });
 
   try {

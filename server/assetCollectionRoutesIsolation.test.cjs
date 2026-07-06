@@ -17,6 +17,7 @@ const {
   insertAsset,
   listCollectionAssets,
   listAssetCollections,
+  listAuditLogs,
 } = require('./db.cjs');
 const {
   ASSET_COLLECTION_LIMITS,
@@ -95,7 +96,15 @@ function runRoute(routeItem, req, res) {
   return next();
 }
 
-function seedAsset(id, userId) {
+function auditReq(req = {}) {
+  return {
+    headers: { 'user-agent': 'Asset Route Audit Browser/1.0' },
+    socket: { remoteAddress: '203.0.113.70' },
+    ...req,
+  };
+}
+
+function seedAsset(id, userId, patch = {}) {
   return insertAsset({
     id,
     userId,
@@ -107,6 +116,7 @@ function seedAsset(id, userId) {
     filePath: path.join(tempDir, `${id}.png`),
     mime: 'image/png',
     metadata: {},
+    ...patch,
   });
 }
 
@@ -200,6 +210,40 @@ test('asset collection list route supports pagination, search, and user isolatio
   createAssetCollection({ userId: alice.id, name: '场景集合 B', category: 'scene', description: 'rain street' });
   createAssetCollection({ userId: alice.id, name: '产品集合 C', category: 'product', description: 'drink bottle' });
   createAssetCollection({ userId: bob.id, name: '角色集合 Bob', category: 'character', description: 'private' });
+  const aliceRoleCollection = createAssetCollection({
+    userId: alice.id,
+    name: '女主 A',
+    category: 'character',
+    description: 'hero pack',
+    metadata: { suggestedRoles: ['三视图', '脸部特写'] },
+  });
+  const aliceRoleAsset = seedAsset('asset-list-alice-role', alice.id, {
+    fileName: 'smile-reference.png',
+    prompt: 'wink expression sheet',
+  });
+  addAssetToCollection({
+    collectionId: aliceRoleCollection.id,
+    assetId: aliceRoleAsset.id,
+    userId: alice.id,
+    role: '表情',
+    note: 'wink mood',
+  });
+  const bobPrivateAsset = seedAsset('asset-list-bob-private-role', bob.id, {
+    fileName: 'private-smile-reference.png',
+  });
+  const bobPrivateCollection = createAssetCollection({
+    userId: bob.id,
+    name: '私有表情集合',
+    category: 'character',
+    description: 'private expression',
+  });
+  addAssetToCollection({
+    collectionId: bobPrivateCollection.id,
+    assetId: bobPrivateAsset.id,
+    userId: bob.id,
+    role: '秘密角色',
+    note: 'only bob can see this',
+  });
 
   const routes = createRoutes();
   const listRoute = route(routes, 'GET', '/api/asset-collections');
@@ -211,8 +255,8 @@ test('asset collection list route supports pagination, search, and user isolatio
   }, firstPageRes);
 
   assert.equal(firstPageRes.statusCode, 200);
-  assert.equal(firstPageRes.body.total, 3);
-  assert.equal(firstPageRes.body.count, 3);
+  assert.equal(firstPageRes.body.total, 4);
+  assert.equal(firstPageRes.body.count, 4);
   assert.equal(firstPageRes.body.limit, 2);
   assert.equal(firstPageRes.body.offset, 0);
   assert.equal(firstPageRes.body.collections.length, 2);
@@ -228,10 +272,50 @@ test('asset collection list route supports pagination, search, and user isolatio
   assert.equal(searchRes.body.total, 1);
   assert.deepEqual(searchRes.body.collections.map((collection) => collection.name), ['场景集合 B']);
 
+  const roleSearchRes = createMockRes();
+  runRoute(listRoute, {
+    userId: alice.id,
+    query: { limit: '10', offset: '0', search: '脸部特写' },
+  }, roleSearchRes);
+
+  assert.equal(roleSearchRes.statusCode, 200);
+  assert.equal(roleSearchRes.body.total, 1);
+  assert.deepEqual(roleSearchRes.body.collections.map((collection) => collection.name), ['女主 A']);
+
+  const assetRoleSearchRes = createMockRes();
+  runRoute(listRoute, {
+    userId: alice.id,
+    query: { limit: '10', offset: '0', search: 'wink' },
+  }, assetRoleSearchRes);
+
+  assert.equal(assetRoleSearchRes.statusCode, 200);
+  assert.equal(assetRoleSearchRes.body.total, 1);
+  assert.deepEqual(assetRoleSearchRes.body.collections.map((collection) => collection.name), ['女主 A']);
+
+  const assetFileSearchRes = createMockRes();
+  runRoute(listRoute, {
+    userId: alice.id,
+    query: { limit: '10', offset: '0', search: 'smile-reference' },
+  }, assetFileSearchRes);
+
+  assert.equal(assetFileSearchRes.statusCode, 200);
+  assert.equal(assetFileSearchRes.body.total, 1);
+  assert.deepEqual(assetFileSearchRes.body.collections.map((collection) => collection.name), ['女主 A']);
+
+  const crossUserNestedSearchRes = createMockRes();
+  runRoute(listRoute, {
+    userId: alice.id,
+    query: { limit: '10', offset: '0', search: '秘密角色' },
+  }, crossUserNestedSearchRes);
+
+  assert.equal(crossUserNestedSearchRes.statusCode, 200);
+  assert.equal(crossUserNestedSearchRes.body.total, 0);
+  assert.deepEqual(crossUserNestedSearchRes.body.collections, []);
+
   const bobSearchRes = createMockRes();
   runRoute(listRoute, {
     userId: bob.id,
-    query: { limit: '10', offset: '0', search: '角色' },
+    query: { limit: '10', offset: '0', search: '角色集合' },
   }, bobSearchRes);
 
   assert.equal(bobSearchRes.statusCode, 200);
@@ -635,4 +719,74 @@ test('asset collection update and delete routes stay isolated by user', () => {
 
   assert.equal(aliceDeleteRes.statusCode, 200);
   assert.equal(getAssetCollectionForUser(aliceCollection.id, alice.id), null);
+});
+
+test('asset collection mutating routes write safe audit logs with request context', () => {
+  const owner = createUser({
+    email: 'asset-route-audit-owner@example.com',
+    username: 'asset-route-audit-owner@example.com',
+    name: 'Asset Route Audit Owner',
+    passwordHash: 'test',
+  });
+  const routes = createRoutes();
+  const createRoute = route(routes, 'POST', '/api/asset-collections');
+  const patchRoute = route(routes, 'PATCH', '/api/asset-collections/:collectionId');
+  const addRoute = route(routes, 'POST', '/api/asset-collections/:collectionId/assets');
+  const deleteRoute = route(routes, 'DELETE', '/api/asset-collections/:collectionId');
+  const asset = seedAsset('route-audit-asset', owner.id);
+
+  const createRes = createMockRes();
+  runRoute(createRoute, auditReq({
+    body: {
+      category: 'character',
+      metadata: { notes: 'route private metadata' },
+      name: 'Route Audit Collection',
+    },
+    userId: owner.id,
+  }), createRes);
+  assert.equal(createRes.statusCode, 201);
+  const collection = createRes.body.collection;
+
+  const patchRes = createMockRes();
+  runRoute(patchRoute, auditReq({
+    body: { name: 'Route Audit Collection v2' },
+    params: { collectionId: collection.id },
+    userId: owner.id,
+  }), patchRes);
+  assert.equal(patchRes.statusCode, 200);
+
+  const addRes = createMockRes();
+  runRoute(addRoute, auditReq({
+    body: {
+      assetId: asset.id,
+      note: 'route private note',
+      role: 'front',
+    },
+    params: { collectionId: collection.id },
+    userId: owner.id,
+  }), addRes);
+  assert.equal(addRes.statusCode, 201);
+
+  const deleteRes = createMockRes();
+  runRoute(deleteRoute, auditReq({
+    params: { collectionId: collection.id },
+    userId: owner.id,
+  }), deleteRes);
+  assert.equal(deleteRes.statusCode, 200);
+
+  const auditLogs = listAuditLogs({
+    actorUserId: owner.id,
+    limit: 10,
+    targetType: 'asset_collection',
+  });
+  assert.deepEqual(auditLogs.map((log) => log.action).sort(), [
+    'asset_collection.add_asset',
+    'asset_collection.create',
+    'asset_collection.delete',
+    'asset_collection.update',
+  ].sort());
+  assert.equal(auditLogs.every((log) => log.ipAddress === '203.0.113.70'), true);
+  assert.equal(auditLogs.every((log) => log.userAgent === 'Asset Route Audit Browser/1.0'), true);
+  assert.equal(JSON.stringify(auditLogs).includes('route private note'), false);
+  assert.equal(JSON.stringify(auditLogs).includes('route private metadata'), false);
 });

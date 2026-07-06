@@ -9,6 +9,11 @@ const {
   resolveServeStatic,
 } = require('./security.cjs');
 const { loadEnv } = require('./env.cjs');
+const { resolveGatewayUpstreams } = require('./services/gatewayService.cjs');
+const {
+  isLoopbackHostname,
+  isWildcardBindHost,
+} = require('./services/internalServiceExposureGuard.cjs');
 
 function normalizeUrl(value) {
   return String(value || '').trim().replace(/\/+$/, '');
@@ -23,9 +28,17 @@ function isLocalUrl(value) {
   if (!value) return false;
   try {
     const parsed = new URL(value);
-    return ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname);
+    return isLoopbackHostname(parsed.hostname);
   } catch {
     return false;
+  }
+}
+
+function hostnameFromUrl(value) {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return '';
   }
 }
 
@@ -137,6 +150,81 @@ function addAdminAccessWarnings(env, mode, warnings) {
   warnings.push('No bootstrap admin or WORKBENCH_ADMIN_TOKEN is configured. Make sure an enabled admin user already exists, or set WORKBENCH_ADMIN_EMAIL and WORKBENCH_ADMIN_PASSWORD before first server start.');
 }
 
+function addGatewayUpstreamErrors(env, errors) {
+  try {
+    resolveGatewayUpstreams(env);
+  } catch (error) {
+    errors.push(error.message);
+  }
+}
+
+function addGatewayInternalTokenChecks(env, mode, errors, warnings) {
+  if (mode !== 'server') return;
+
+  let upstreams;
+  try {
+    upstreams = resolveGatewayUpstreams(env);
+  } catch {
+    return;
+  }
+
+  const entries = Object.entries(upstreams);
+  if (entries.length === 0) return;
+
+  const internalToken = String(env.WORKBENCH_INTERNAL_SERVICE_TOKEN || '').trim();
+  const remoteUpstreams = entries
+    .filter(([, value]) => !isLoopbackHostname(hostnameFromUrl(value)))
+    .map(([key, value]) => `${key}=${value}`);
+  const wildcardUpstreams = entries
+    .filter(([, value]) => isWildcardBindHost(hostnameFromUrl(value)))
+    .map(([key, value]) => `${key}=${value}`);
+
+  if (wildcardUpstreams.length > 0) {
+    errors.push(`Gateway upstreams must not point to wildcard bind hosts such as 0.0.0.0 or [::]: ${wildcardUpstreams.join(', ')}`);
+  }
+
+  if (remoteUpstreams.length > 0 && !internalToken) {
+    errors.push(`WORKBENCH_INTERNAL_SERVICE_TOKEN is required when gateway upstreams are not loopback: ${remoteUpstreams.join(', ')}`);
+  } else if (!internalToken) {
+    warnings.push('Gateway upstreams are configured without WORKBENCH_INTERNAL_SERVICE_TOKEN. This is acceptable only when all internal services listen on loopback and are not exposed outside the host.');
+  }
+}
+
+function addInternalServiceHostChecks(env, mode, errors, warnings) {
+  if (mode !== 'server') return;
+
+  const hostEntries = [
+    ['WORKBENCH_AUTH_SERVICE_HOST', env.WORKBENCH_AUTH_SERVICE_HOST],
+    ['WORKBENCH_WORKER_SERVICE_HOST', env.WORKBENCH_WORKER_SERVICE_HOST],
+    ['WORKBENCH_ASSET_SERVICE_HOST', env.WORKBENCH_ASSET_SERVICE_HOST],
+    ['WORKBENCH_MODEL_SERVICE_HOST', env.WORKBENCH_MODEL_SERVICE_HOST],
+    ['WORKBENCH_WORKFLOW_SERVICE_HOST', env.WORKBENCH_WORKFLOW_SERVICE_HOST],
+  ].filter(([, value]) => String(value || '').trim());
+  const internalToken = String(env.WORKBENCH_INTERNAL_SERVICE_TOKEN || '').trim();
+
+  for (const [envName, value] of hostEntries) {
+    if (isWildcardBindHost(value)) {
+      errors.push(`${envName} must not bind to ${value} in server mode. Internal services should listen on 127.0.0.1 or a private interface behind the gateway.`);
+      continue;
+    }
+
+    if (!isLoopbackHostname(value)) {
+      if (!internalToken) {
+        errors.push(`${envName} is not loopback, so WORKBENCH_INTERNAL_SERVICE_TOKEN is required.`);
+      }
+      warnings.push(`${envName} is not loopback. Make sure this service is reachable only from the gateway/private network and not exposed to the public internet.`);
+    }
+  }
+}
+
+function addPrivateMediaFetchErrors(env, mode, errors) {
+  if (mode !== 'server') return;
+
+  if (parseBoolean(env.WORKBENCH_ALLOW_PRIVATE_MEDIA_FETCH, false)) {
+    errors.push('WORKBENCH_ALLOW_PRIVATE_MEDIA_FETCH must stay false in server mode. Private media fetch disables SSRF protection for downloaded model assets.');
+  }
+}
+
 function checkDeploymentConfig(env = process.env) {
   const errors = [];
   const warnings = [];
@@ -157,6 +245,10 @@ function checkDeploymentConfig(env = process.env) {
   addEmailDeploymentErrors(env, mode, errors);
   addBootstrapAdminErrors(env, mode, errors, warnings);
   addAdminAccessWarnings(env, mode, warnings);
+  addGatewayUpstreamErrors(env, errors);
+  addGatewayInternalTokenChecks(env, mode, errors, warnings);
+  addInternalServiceHostChecks(env, mode, errors, warnings);
+  addPrivateMediaFetchErrors(env, mode, errors);
 
   if (mode === 'server' && serveStatic) {
     errors.push('WORKBENCH_SERVE_STATIC must be false in server mode. Deploy the frontend as static files on Nginx, Vercel, OSS, or a CDN, and keep this backend API-only.');

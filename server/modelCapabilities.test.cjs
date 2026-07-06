@@ -56,15 +56,38 @@ test('model capability presets expose complete manually maintained templates', (
   const presets = listModelCapabilityPresets();
   const seedance = presets.find((preset) => preset.providerId === 'seedance' && preset.modelPattern === 'doubao-seedance-2-0-mini-*');
   const bailianImage = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-image*');
+  const bailianTextVideo = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-t2v*');
+  const bailianImageVideo = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-*-i2v*');
 
   assert.ok(seedance);
   assert.equal(seedance.capabilities.videoGeneration, true);
   assert.equal(seedance.capabilities.video.durationMax, 15);
+  assert.equal(seedance.capabilities.video.maxReferenceImages, 9);
+  assert.equal(seedance.capabilities.video.maxReferenceVideos, 3);
+  assert.equal(seedance.capabilities.video.maxReferenceAudios, 3);
+  assert.equal(seedance.capabilities.video.maxMediaFiles, 12);
+  assert.deepEqual(seedance.capabilities.video.modes, ['text-to-video', 'image-to-video', 'images-to-video', 'video-editing', 'video-extension']);
+  assert.deepEqual(seedance.capabilities.video.mediaTypes, ['text', 'image', 'video', 'audio']);
   assert.ok(seedance.description.includes('视频'));
 
   assert.ok(bailianImage);
   assert.equal(bailianImage.capabilities.imageGeneration, true);
   assert.equal(bailianImage.capabilities.image.maxImages, 12);
+
+  assert.ok(bailianTextVideo);
+  assert.equal(bailianTextVideo.capabilities.videoGeneration, true);
+  assert.equal(bailianTextVideo.capabilities.video.durationMin, 2);
+  assert.equal(bailianTextVideo.capabilities.video.durationMax, 15);
+  assert.equal(bailianTextVideo.capabilities.video.supportsReferenceAudio, true);
+  assert.equal(bailianTextVideo.capabilities.video.maxReferenceAudios, 1);
+  assert.equal(bailianTextVideo.capabilities.video.autoAudioByDefault, true);
+  assert.deepEqual(bailianTextVideo.capabilities.video.audioFormats, ['mp3', 'wav']);
+
+  assert.ok(bailianImageVideo);
+  assert.equal(bailianImageVideo.capabilities.video.maxReferenceImages, 2);
+  assert.equal(bailianImageVideo.capabilities.video.maxReferenceVideos, 1);
+  assert.equal(bailianImageVideo.capabilities.video.maxReferenceAudios, 1);
+  assert.deepEqual(bailianImageVideo.capabilities.video.mediaTypes, ['first_frame', 'last_frame', 'driving_audio', 'first_clip']);
 });
 
 test('model capability preset route can filter by provider', () => {
@@ -174,6 +197,34 @@ test('video capability filter validates reference video and audio count limits',
 
   assert.equal(tooManyReferenceAudios.ok, false);
   assert.equal(tooManyReferenceAudios.error, 'This model supports at most 1 reference audio files.');
+});
+
+test('video capability filter validates combined reference media count limits', () => {
+  const result = filterVideoBodyByCapabilities({
+    model: 'seedance-video',
+    prompt: 'mix many media references',
+    content: [
+      { type: 'text' },
+      ...Array.from({ length: 9 }, () => ({ type: 'image_url' })),
+      ...Array.from({ length: 3 }, () => ({ type: 'video_url' })),
+      { type: 'audio_url' },
+    ],
+    duration: 5,
+  }, {
+    videoGeneration: true,
+    video: {
+      supportsReferenceImage: true,
+      supportsReferenceVideo: true,
+      supportsReferenceAudio: true,
+      maxReferenceImages: 9,
+      maxReferenceVideos: 3,
+      maxReferenceAudios: 3,
+      maxMediaFiles: 12,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, 'This model supports at most 12 reference media files.');
 });
 
 test('video capability filter validates supported modes without leaking workbench mode upstream', () => {
@@ -379,11 +430,76 @@ test('model capability save writes an audit log', () => {
   );
   assert.ok(auditLog);
   assert.deepEqual(auditLog.metadata, {
+    operation: 'create',
     providerId: 'openai-compatible',
     modelPattern: 'audit-image-*',
     capabilityKeys: ['image', 'imageGeneration', 'video'],
   });
+  assert.equal(Object.hasOwn(auditLog.metadata, 'previousCapabilityKeys'), false);
   assert.equal(JSON.stringify(auditLog.metadata).includes('do-not-store-in-audit'), false);
+  assert.equal(Object.hasOwn(auditLog.metadata, 'capabilities'), false);
+  handlers.stopTextQueue();
+});
+
+test('model capability update audit logs previous and next capability keys safely', () => {
+  const admin = createUser({
+    email: 'model-capability-update-admin@example.com',
+    username: 'model-capability-update-admin@example.com',
+    name: 'Model Capability Update Admin',
+    role: 'admin',
+    passwordHash: 'test',
+  });
+  upsertModelCapability('openai-compatible', 'audit-update-*', {
+    text: true,
+    imageGeneration: true,
+    image: { maxImages: 1, internalNote: 'old-secret-note' },
+  });
+
+  const app = createFakeApp();
+  const handlers = registerModelProxyRoutes(app, {
+    enableGenericProxy: false,
+    joinUrl: (baseUrl, endpoint) => `${baseUrl}${endpoint}`,
+    proxyAllowlist: [],
+    proxyRequest: async () => ({ status: 200, data: {} }),
+    getRequestUserId: () => admin.id,
+    readSecrets: async () => ({}),
+    resolveApiCredentials: async () => ({ baseUrl: 'https://api.example.com', apiKey: 'key', providerId: 'openai-compatible' }),
+    requireAdmin: () => true,
+    resolveDirectCredentials: () => ({ baseUrl: 'https://api.example.com', apiKey: 'key', providerId: 'openai-compatible' }),
+  });
+
+  const route = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/model-capabilities');
+  const res = createMockRes();
+  route.handler({
+    authUser: admin,
+    body: {
+      providerId: 'openai-compatible',
+      modelPattern: 'audit-update-*',
+      capabilities: {
+        videoGeneration: true,
+        video: { durationMax: 10, internalNote: 'new-secret-note' },
+      },
+    },
+    headers: { 'user-agent': 'Audit Browser' },
+    socket: { remoteAddress: '203.0.113.13' },
+  }, res);
+
+  assert.equal(res.statusCode, 201);
+  const auditLog = listAuditLogs().find((log) =>
+    log.action === 'model_capability.upsert' &&
+    log.targetId === 'openai-compatible:audit-update-*' &&
+    log.actorUserId === admin.id
+  );
+  assert.ok(auditLog);
+  assert.deepEqual(auditLog.metadata, {
+    operation: 'update',
+    providerId: 'openai-compatible',
+    modelPattern: 'audit-update-*',
+    previousCapabilityKeys: ['image', 'imageGeneration', 'text'],
+    capabilityKeys: ['video', 'videoGeneration'],
+  });
+  assert.equal(JSON.stringify(auditLog.metadata).includes('old-secret-note'), false);
+  assert.equal(JSON.stringify(auditLog.metadata).includes('new-secret-note'), false);
   assert.equal(Object.hasOwn(auditLog.metadata, 'capabilities'), false);
   handlers.stopTextQueue();
 });

@@ -57,8 +57,11 @@ function headerField(headers = {}, ...names) {
 }
 
 function extractUpstreamErrorDetails(result = {}) {
+  const status = Number(result?.status || 0);
   const data = asRecord(result.data);
   const error = asRecord(data.error);
+  const canUseStringError = status >= 400 && status < 500;
+  const stringError = canUseStringError && typeof data.error === 'string' ? data.error : '';
   const output = asRecord(data.output);
   const outputError = asRecord(output.error);
   const innerData = asRecord(data.data);
@@ -67,46 +70,71 @@ function extractUpstreamErrorDetails(result = {}) {
   const requestId = stringField(
     data.request_id,
     data.requestId,
+    data.RequestId,
     data.requestID,
+    data.RequestID,
     data.req_id,
     data.trace_id,
     error.request_id,
     error.requestId,
+    error.RequestId,
     output.request_id,
+    output.RequestId,
     outputError.request_id,
     outputError.requestId,
+    outputError.RequestId,
     innerData.request_id,
+    innerData.RequestId,
     innerDataError.request_id,
     innerDataError.requestId,
+    innerDataError.RequestId,
     headerField(result.headers, 'x-request-id', 'x-tt-logid', 'x-acs-request-id', 'request-id')
   );
 
   return {
     code: stringField(
       error.code,
+      error.Code,
       error.error_code,
+      error.ErrorCode,
       data.code,
+      data.Code,
       data.error_code,
+      data.ErrorCode,
       data.err_code,
       output.code,
+      output.Code,
       outputError.code,
+      outputError.Code,
       outputError.error_code,
+      outputError.ErrorCode,
       innerData.code,
+      innerData.Code,
       innerDataError.code,
+      innerDataError.Code,
       innerDataError.error_code
     ),
-    type: stringField(error.type, data.type, data.error_type, output.type, outputError.type, innerData.type, innerDataError.type),
+    type: stringField(error.type, error.Type, data.type, data.Type, data.error_type, output.type, outputError.type, innerData.type, innerDataError.type),
     message: stringField(
+      stringError,
       error.message,
+      error.Message,
       data.message,
+      data.Message,
       data.msg,
       data.error_message,
       data.error_description,
+      data.ErrorMessage,
       output.message,
+      output.Message,
       outputError.message,
+      outputError.Message,
       outputError.error_message,
+      outputError.ErrorMessage,
       innerData.message,
+      innerData.Message,
       innerDataError.message,
+      innerDataError.Message,
       innerDataError.error_message
     ),
     param: stringField(error.param, data.param, outputError.param, innerDataError.param),

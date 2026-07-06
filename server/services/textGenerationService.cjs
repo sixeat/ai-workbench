@@ -1,11 +1,6 @@
 const { randomUUID } = require('crypto');
-const {
-  addTaskLog,
-  createTask,
-  getTask,
-  updateTask,
-} = require('../db.cjs');
 const { safeTaskError, safeUpstreamErrorData, safeUpstreamTaskError } = require('../httpErrors.cjs');
+const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
 const { getTextProviderAdapter } = require('./textProviderAdapters.cjs');
 
 function stripSecretFields(body = {}) {
@@ -21,14 +16,14 @@ function inferTextModel(body = {}) {
   return String(body.model || body.messages?.[0]?.model || '').trim();
 }
 
-function taskWasCancelled(taskId) {
-  return getTask(taskId)?.status === 'cancelled';
+function taskWasCancelled(taskId, taskRepository = defaultTaskRepository) {
+  return taskRepository.getTask(taskId)?.status === 'cancelled';
 }
 
-function createTextTask(userId, body, status = 'queued') {
+function createTextTask(userId, body, status = 'queued', taskRepository = defaultTaskRepository) {
   const requestKind = body.requestKind === 'claude' ? 'claude' : 'chat';
   const safeBody = stripSecretFields(body);
-  return createTask({
+  return taskRepository.createTask({
     id: randomUUID(),
     userId,
     nodeType: 'text',
@@ -53,6 +48,7 @@ function createTextGenerationService({
   proxyRequest,
   resolveApiCredentials,
   resolveDirectCredentials,
+  taskRepository = defaultTaskRepository,
 }) {
   async function resolveRequestCredentials({ userId, body, secrets }) {
     if (body.apiKeyId) {
@@ -67,15 +63,15 @@ function createTextGenerationService({
 
   async function runTextTask({ userId, body = {}, secrets, task }) {
     const startedAt = Date.now();
-    const activeTask = task || createTextTask(userId, body, 'running');
+    const activeTask = task || createTextTask(userId, body, 'running', taskRepository);
     const taskBody = {
       ...(activeTask.input || {}),
       ...body,
     };
 
     try {
-      if (taskWasCancelled(activeTask.id)) {
-        addTaskLog(activeTask.id, {
+      if (taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.addTaskLog(activeTask.id, {
           level: 'warn',
           event: 'cancelled_before_start',
           message: 'Task was cancelled before the text worker started.',
@@ -90,7 +86,7 @@ function createTextGenerationService({
       });
 
       if (!baseUrl) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'Base URL is required' },
           durationMs: Date.now() - startedAt,
@@ -99,7 +95,7 @@ function createTextGenerationService({
       }
 
       if (!apiKey) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'API key is required' },
           durationMs: Date.now() - startedAt,
@@ -117,7 +113,7 @@ function createTextGenerationService({
         body: request.body,
       });
 
-      addTaskLog(activeTask.id, {
+      taskRepository.addTaskLog(activeTask.id, {
         event: 'upstream_text_response',
         message: `Text upstream responded with HTTP ${result.status}.`,
         data: {
@@ -127,8 +123,8 @@ function createTextGenerationService({
         },
       });
 
-      if (taskWasCancelled(activeTask.id)) {
-        addTaskLog(activeTask.id, {
+      if (taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.addTaskLog(activeTask.id, {
           level: 'warn',
           event: 'cancelled_after_upstream',
           message: 'Text upstream request finished after cancellation; output was not written.',
@@ -142,7 +138,7 @@ function createTextGenerationService({
       }
 
       if (result.status >= 400) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: safeUpstreamTaskError(result, 'Text generation upstream request failed.'),
           durationMs: Date.now() - startedAt,
@@ -150,7 +146,7 @@ function createTextGenerationService({
         return { status: result.status, data: safeUpstreamErrorData(result, 'Text generation upstream request failed.') };
       }
 
-      updateTask(activeTask.id, {
+      taskRepository.updateTask(activeTask.id, {
         status: 'succeeded',
         output: result.data,
         error: null,
@@ -166,8 +162,8 @@ function createTextGenerationService({
       };
     } catch (error) {
       console.error('/api/text task error:', error);
-      if (!taskWasCancelled(activeTask.id)) {
-        updateTask(activeTask.id, {
+      if (!taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: safeTaskError(error, 'Text generation failed.'),
           durationMs: Date.now() - startedAt,
@@ -178,7 +174,8 @@ function createTextGenerationService({
   }
 
   return {
-    createTextTask,
+    createTextTask: (userId, body, status = 'queued') =>
+      createTextTask(userId, body, status, taskRepository),
     runTextTask,
   };
 }

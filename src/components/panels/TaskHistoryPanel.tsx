@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileVideo, FolderOpen, ImagePlus, Plus, RefreshCw, RotateCcw, Search, Square, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 import {
   proxyAddAssetToCollection,
   proxyAddAssetsToCollection,
@@ -17,15 +18,17 @@ import {
   type ProxyAssetCollection,
   type ProxyTask,
 } from '../../lib/apiProxy';
-import { getSuggestedRoles } from '../../lib/assetCollections';
+import { collectionHasAsset, filterAssetsNotInCollection, getSuggestedRoles } from '../../lib/assetCollections';
 import {
   canCancelTask,
   canRetryTask,
   chunkTaskAssetIds,
+  collectArchivableTaskAssetIds,
   collectTaskAssets,
   extractTaskOutputText,
   extractTaskReusablePrompt,
   filterTaskHistoryItems,
+  formatTaskAssetArchiveSummary,
   formatTaskHistoryPageSummary,
   formatTaskLogEvent,
   mergeTaskHistoryPages,
@@ -272,6 +275,23 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
     taskTotal,
     { search: taskSearch, status: statusFilter }
   );
+  const archivableTaskCards = useMemo(
+    () => selectedCollection
+      ? filteredTaskCards.map((item) => ({
+        ...item,
+        assets: filterAssetsNotInCollection(item.assets, selectedCollection),
+      }))
+      : filteredTaskCards,
+    [filteredTaskCards, selectedCollection]
+  );
+  const archivableAssetIds = useMemo(
+    () => collectArchivableTaskAssetIds(archivableTaskCards),
+    [archivableTaskCards]
+  );
+  const archiveSummary = useMemo(
+    () => formatTaskAssetArchiveSummary(archivableTaskCards),
+    [archivableTaskCards]
+  );
   const hasMoreTasks = tasks.length < taskTotal;
   const hasMoreCollections = collections.length < collectionTotal;
 
@@ -292,6 +312,11 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
   };
 
   const addAssetToLibrary = async (asset: ProxyAsset) => {
+    if (selectedCollection && collectionHasAsset(selectedCollection, asset.id)) {
+      setNotice('这个产物已在当前集合中');
+      return;
+    }
+
     try {
       setError('');
       const collectionId = targetCollectionId || await createDefaultCollection();
@@ -309,11 +334,17 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
 
   const addTaskAssetsToLibrary = async (task: ProxyTask, assets: ProxyAsset[]) => {
     if (assets.length === 0) return;
+    const newAssets = selectedCollection ? filterAssetsNotInCollection(assets, selectedCollection) : assets;
+    if (newAssets.length === 0) {
+      setNotice('这些产物已在当前集合中');
+      return;
+    }
+
     try {
       setError('');
       const collectionId = targetCollectionId || await createDefaultCollection();
       const role = targetAssetRole || selectedRoles[0] || '生成图';
-      const assetIds = uniqueTaskAssetIds(assets);
+      const assetIds = uniqueTaskAssetIds(newAssets);
       if (assetIds.length === 0) {
         setError('这些产物没有资产 ID，暂时不能加入素材集合。');
         return;
@@ -338,6 +369,36 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
     }
   };
 
+  const addFilteredTaskAssetsToLibrary = async () => {
+    if (archivableAssetIds.length === 0) {
+      setError('已加载结果里没有可入库产物。');
+      return;
+    }
+
+    try {
+      setError('');
+      const collectionId = targetCollectionId || await createDefaultCollection();
+      const role = targetAssetRole || selectedRoles[0] || '生成图';
+      let addedTotal = 0;
+      let skippedTotal = 0;
+
+      for (const chunk of chunkTaskAssetIds(archivableAssetIds)) {
+        const result = await proxyAddAssetsToCollection(collectionId, {
+          assetIds: chunk,
+          role,
+          note: `来自任务历史批量归档，共 ${archivableAssetIds.length} 个产物`,
+        });
+        addedTotal += result.added;
+        skippedTotal += result.skipped;
+      }
+
+      await loadCollections({ selectId: collectionId });
+      setNotice(skippedTotal > 0 ? `已加入 ${addedTotal} 个素材，跳过 ${skippedTotal} 个` : `已批量加入 ${addedTotal} 个素材`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '批量加入素材集合失败');
+    }
+  };
+
   const toggleTaskDetails = (taskId: string) => {
     setExpandedTaskIds((current) => (
       current.includes(taskId)
@@ -351,7 +412,7 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="absolute bottom-4 right-4 z-50 flex max-h-[72vh] w-[500px] flex-col overflow-hidden rounded-xl border border-panel-border bg-panel-bg shadow-2xl">
+    <FloatingWindow placement="bottom-right" contentClassName="max-h-[72vh] w-[500px] flex-col">
       <div className="flex items-center gap-2 border-b border-panel-border px-3 py-2">
         <div className="text-sm font-medium text-white">任务历史</div>
         <span className="rounded bg-canvas-bg px-1.5 py-0.5 text-[10px] text-gray-500">{taskSummary}</span>
@@ -449,6 +510,14 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
               {loadingMoreCollections ? '加载中' : '加载更多'}
             </button>
           )}
+          <button
+            onClick={() => void addFilteredTaskAssetsToLibrary()}
+            disabled={archivableAssetIds.length === 0}
+            className="rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-300 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            title={archiveSummary}
+          >
+            归档已加载结果
+          </button>
         </div>
       </div>
 
@@ -470,6 +539,7 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
             const copyableInputJson = serializeTaskInputForCopy(task.input);
             const logs = task.logs || [];
             const logsLoading = detailLoadingTaskIds.includes(task.id);
+            const newTaskAssets = selectedCollection ? filterAssetsNotInCollection(assets, selectedCollection) : assets;
 
             return (
               <div key={task.id} className="rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
@@ -487,6 +557,7 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
                     {assets.map((asset, index) => {
                       const url = proxyAssetUrl(asset.url);
                       const image = isImageAsset(asset);
+                      const alreadyInCollection = selectedCollection ? collectionHasAsset(selectedCollection, asset.id) : false;
                       return (
                         <div key={`${asset.id}-${index}`} className="overflow-hidden rounded-lg border border-panel-border bg-black/20">
                           <button
@@ -524,9 +595,14 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
                                 <FolderOpen className="h-3 w-3" />
                               </IconButton>
                             )}
-                            <IconButton title="加入素材集合" onClick={() => void addAssetToLibrary(asset)}>
+                            <IconButton
+                              title={alreadyInCollection ? '已在当前素材集合中' : '加入素材集合'}
+                              disabled={alreadyInCollection}
+                              onClick={() => void addAssetToLibrary(asset)}
+                            >
                               <ImagePlus className="h-3 w-3" />
                             </IconButton>
+                            {alreadyInCollection && <span className="text-[9px] text-emerald-300">已在集合</span>}
                           </div>
                         </div>
                       );
@@ -668,10 +744,11 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
                   {assets.length > 0 && (
                     <button
                       onClick={() => void addTaskAssetsToLibrary(task, assets)}
-                      className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-700/50"
+                      disabled={newTaskAssets.length === 0}
+                      className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-gray-300 hover:bg-gray-700/50 disabled:cursor-not-allowed disabled:opacity-40"
                     >
                       <ImagePlus className="h-3 w-3" />
-                      全部入库
+                      {newTaskAssets.length === 0 ? '已入库' : '全部入库'}
                     </button>
                   )}
                   <button
@@ -714,13 +791,28 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
           </div>
         )}
       </div>
-    </div>
+    </FloatingWindow>
   );
 }
 
-function IconButton({ children, title, onClick }: { children: ReactNode; title: string; onClick: () => void }) {
+function IconButton({
+  children,
+  disabled = false,
+  title,
+  onClick,
+}: {
+  children: ReactNode;
+  disabled?: boolean;
+  title: string;
+  onClick: () => void;
+}) {
   return (
-    <button className="rounded p-1 text-gray-400 hover:bg-gray-700/60 hover:text-white" onClick={onClick} title={title}>
+    <button
+      className="rounded p-1 text-gray-400 hover:bg-gray-700/60 hover:text-white disabled:cursor-not-allowed disabled:text-gray-600 disabled:hover:bg-transparent disabled:hover:text-gray-600"
+      disabled={disabled}
+      onClick={onClick}
+      title={title}
+    >
       {children}
     </button>
   );

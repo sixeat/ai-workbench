@@ -1,7 +1,12 @@
 const { createCipheriv, createDecipheriv, scryptSync, randomBytes } = require('crypto');
-const { getApiKeyForUser } = require('../db.cjs');
+const { apiKeyRepository: defaultApiKeyRepository } = require('../repositories/apiKeyRepository.cjs');
 
-function createCredentialService({ keyEncryptionSecret, deploymentMode = 'local', allowDirectCredentials = false }) {
+function createCredentialService({
+  keyEncryptionSecret,
+  deploymentMode = 'local',
+  allowDirectCredentials = false,
+  apiKeyRepository = defaultApiKeyRepository,
+}) {
   function directCredentialsAllowed() {
     return deploymentMode !== 'server' || allowDirectCredentials;
   }
@@ -49,7 +54,7 @@ function createCredentialService({ keyEncryptionSecret, deploymentMode = 'local'
 
   async function resolveApiCredentials({ userId, body, secrets }) {
     if (body.apiKeyId) {
-      const stored = getApiKeyForUser(body.apiKeyId, userId, true);
+      const stored = apiKeyRepository.getApiKeyForUser(body.apiKeyId, userId, true);
       if (!keyCanBeUsedByUser(stored, userId)) {
         throw Object.assign(new Error('API key is not available for this user.'), { status: 403 });
       }

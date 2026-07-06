@@ -147,6 +147,13 @@ function formatPixelRange(min: unknown, max: unknown): string {
   return `${minValue || 0}-${maxValue || '不限'} 像素`;
 }
 
+function formatRange(min: unknown, max: unknown, suffix: string): string {
+  const minValue = numberValue(min);
+  const maxValue = numberValue(max);
+  if (!minValue && !maxValue) return '';
+  return `${minValue || 0}-${maxValue || '不限'}${suffix}`;
+}
+
 function parameterNumber(inputs: NodeInputs, key: string, fallback: unknown): number {
   const parsed = Number(getParameter(inputs, key, Number(fallback || 0)));
   return Number.isFinite(parsed) ? parsed : 0;
@@ -288,12 +295,26 @@ export function describeModelCapabilities(
     const maxReferenceImages = numberValue(video.maxReferenceImages);
     const maxReferenceVideos = numberValue(video.maxReferenceVideos);
     const maxReferenceAudios = numberValue(video.maxReferenceAudios);
+    const maxMediaFiles = numberValue(video.maxMediaFiles);
     const modes = optionalListText(video.modes);
     const fps = numberValue(video.fps);
     const taskTypes = optionalListText(video.taskTypes);
     const mediaTypes = optionalListText(video.mediaTypes);
+    const audioFormats = optionalListText(video.audioFormats);
+    const imageFormats = optionalListText(video.imageFormats);
+    const videoFormats = optionalListText(video.videoFormats);
+    const outputFormats = optionalListText(video.outputFormats);
+    const audioDurationRange = formatRange(video.audioDurationMin, video.audioDurationMax, ' 秒');
+    const imageSideRange = formatRange(video.imageMinSide, video.imageMaxSide, ' px');
     const concurrency = numberValue(video.concurrency);
     const rpm = numberValue(video.rpm);
+    const promptMaxChars = numberValue(video.promptMaxChars);
+    const negativePromptMaxChars = numberValue(video.negativePromptMaxChars);
+    const audioMaxFileMb = numberValue(video.audioMaxFileMb);
+    const imageMaxFileMb = numberValue(video.imageMaxFileMb);
+    const videoMaxFileMb = numberValue(video.videoMaxFileMb);
+    const resultUrlTtlHours = numberValue(video.resultUrlTtlHours);
+    const queryRps = numberValue(video.queryRps);
     rows.push({ label: '视频生成', value: supportedText(capabilities.videoGeneration) });
     if (modes) rows.push({ label: '模式', value: modes });
     rows.push({ label: '时长', value: durationMin || durationMax ? `${durationMin || 0}-${durationMax || '不限'} 秒` : '未声明' });
@@ -312,7 +333,9 @@ export function describeModelCapabilities(
       label: '参考音频',
       value: video.supportsReferenceAudio ? `支持${maxReferenceAudios ? `，最多 ${maxReferenceAudios} 个` : ''}` : '不支持',
     });
+    if (maxMediaFiles) rows.push({ label: '参考素材总数', value: `最多 ${maxMediaFiles} 个` });
     rows.push({ label: '生成音频', value: supportedText(video.supportsAudioGeneration) });
+    if (video.autoAudioByDefault !== undefined) rows.push({ label: '自动音频', value: supportedText(video.autoAudioByDefault) });
     rows.push({ label: '智能改写', value: supportedText(video.supportsPromptExtend) });
     rows.push({ label: 'Seed', value: supportedText(video.supportsSeed) });
     rows.push({ label: '反向词', value: supportedText(video.supportsNegativePrompt) });
@@ -322,6 +345,19 @@ export function describeModelCapabilities(
     }
     if (taskTypes) rows.push({ label: '任务类型', value: taskTypes });
     if (mediaTypes) rows.push({ label: '媒体类型', value: mediaTypes });
+    if (promptMaxChars) rows.push({ label: '提示词长度', value: `${promptMaxChars} 字` });
+    if (negativePromptMaxChars) rows.push({ label: '反向词长度', value: `${negativePromptMaxChars} 字` });
+    if (audioFormats) rows.push({ label: '参考音频格式', value: audioFormats });
+    if (audioDurationRange) rows.push({ label: '参考音频时长', value: audioDurationRange });
+    if (audioMaxFileMb) rows.push({ label: '参考音频大小', value: `${audioMaxFileMb} MB` });
+    if (imageFormats) rows.push({ label: '参考图片格式', value: imageFormats });
+    if (imageSideRange) rows.push({ label: '参考图片边长', value: imageSideRange });
+    if (imageMaxFileMb) rows.push({ label: '参考图片大小', value: `${imageMaxFileMb} MB` });
+    if (videoFormats) rows.push({ label: '参考视频格式', value: videoFormats });
+    if (videoMaxFileMb) rows.push({ label: '参考视频大小', value: `${videoMaxFileMb} MB` });
+    if (outputFormats) rows.push({ label: '输出格式', value: outputFormats });
+    if (resultUrlTtlHours) rows.push({ label: '结果链接有效期', value: `${resultUrlTtlHours} 小时` });
+    if (queryRps) rows.push({ label: '查询频控', value: `${queryRps} RPS` });
   }
 
   return rows;
@@ -535,6 +571,7 @@ export function summarizeModelCapabilityUsage(
     const maxReferenceImages = numberValue(video.maxReferenceImages);
     const maxReferenceVideos = numberValue(video.maxReferenceVideos);
     const maxReferenceAudios = numberValue(video.maxReferenceAudios);
+    const maxMediaFiles = numberValue(video.maxMediaFiles);
     const resolutions = stringArray(video.resolutions);
     const ratios = stringArray(video.ratios);
     const duration = parameterNumber(inputs, 'duration', config.duration);
@@ -597,6 +634,14 @@ export function summarizeModelCapabilityUsage(
             : 'neutral'
       ));
     }
+    if (maxMediaFiles) {
+      const mediaCount = imageCount + videoCount + audioCount;
+      rows.push(usageRow(
+        '参考素材总数',
+        `${mediaCount} / ${maxMediaFiles} 个`,
+        mediaCount > maxMediaFiles ? 'warning' : mediaCount > 0 ? 'success' : 'neutral'
+      ));
+    }
 
     return rows;
   }
@@ -649,6 +694,7 @@ export function validateNodeCapabilityUsage(
     const maxReferenceImages = numberValue(video.maxReferenceImages);
     const maxReferenceVideos = numberValue(video.maxReferenceVideos);
     const maxReferenceAudios = numberValue(video.maxReferenceAudios);
+    const maxMediaFiles = numberValue(video.maxMediaFiles);
     const resolutions = stringArray(video.resolutions);
     const ratios = stringArray(video.ratios);
     const modes = stringArray(video.modes);
@@ -676,6 +722,7 @@ export function validateNodeCapabilityUsage(
     if (maxReferenceVideos && videoCount > maxReferenceVideos) issues.push(`参考视频超过限制：最多 ${maxReferenceVideos} 个。`);
     if (audioCount > 0 && video.supportsReferenceAudio === false) issues.push('当前模型不支持参考音频。');
     if (maxReferenceAudios && audioCount > maxReferenceAudios) issues.push(`参考音频超过限制：最多 ${maxReferenceAudios} 个。`);
+    if (maxMediaFiles && imageCount + videoCount + audioCount > maxMediaFiles) issues.push(`参考素材总数超过限制：最多 ${maxMediaFiles} 个。`);
     if (config.generateAudio && video.supportsAudioGeneration === false) issues.push('当前模型不支持生成音频。');
     if (config.promptExtend && !video.supportsPromptExtend) issues.push('当前模型不支持智能改写 Prompt，运行时会忽略。');
     if (Number(config.seed || 0) > 0 && !video.supportsSeed) issues.push('当前模型不支持 Seed，运行时会忽略。');

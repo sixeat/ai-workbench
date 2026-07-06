@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Bot,
   BrainCircuit,
+  ChevronDown,
   FileText,
   Image as ImageIcon,
   Loader2,
@@ -15,6 +16,7 @@ import {
 } from 'lucide-react';
 import type { Edge } from '@xyflow/react';
 import { cn } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { generateId } from '../../lib/utils';
 import type { NodeType } from '../../types/nodes';
@@ -162,18 +164,24 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
   const [desktopMessages, setDesktopMessages] = useState<DesktopAgentChatMessage[]>([]);
   const [desktopStatus, setDesktopStatus] = useState<DesktopAgentChatStatus>({ state: 'idle', speaking: false });
   const [desktopLoading, setDesktopLoading] = useState(false);
+  const [desktopLoadAttempted, setDesktopLoadAttempted] = useState(false);
   const [desktopSending, setDesktopSending] = useState(false);
   const [desktopError, setDesktopError] = useState('');
+  const [agentSelectOpen, setAgentSelectOpen] = useState(false);
   const [input, setInput] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const agentSelectRef = useRef<HTMLDivElement>(null);
   const { addNode, setEdges } = useCanvasStore();
   const selectedDesktopAgent = desktopAgents.find((agent) => agent.id === selectedDesktopAgentId) || desktopAgents[0] || null;
+  const selectedDesktopAgentLabel = selectedDesktopAgent?.name || selectedDesktopAgent?.id || '暂无 Agent';
   const desktopAnimation = selectDesktopAnimationState(desktopManifest, desktopStatus);
   const desktopAnimationLabel = desktopAnimationAssetLabel(desktopAnimation.assetKind);
 
   const loadDesktopAgents = async () => {
+    setDesktopLoadAttempted(true);
     setDesktopLoading(true);
     setDesktopError('');
+    setAgentSelectOpen(false);
     try {
       const agents = await listDesktopAgents();
       setDesktopAgents(agents);
@@ -182,17 +190,29 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
       setDesktopMessages((current) => current.length ? current : [createDesktopAgentWelcomeMessage(firstAgent)]);
     } catch (error) {
       const message = messageFromError(error, '无法连接 desktop-agents 后端。');
+      setDesktopAgents([]);
+      setSelectedDesktopAgentId('');
       setDesktopError(message);
-      setDesktopMessages((current) => appendDesktopAgentSystemMessage(current, `连接失败：${message}`));
     } finally {
       setDesktopLoading(false);
     }
   };
 
   useEffect(() => {
-    if (!isOpen || mode !== 'desktop' || desktopAgents.length || desktopLoading) return;
+    if (!isOpen || mode !== 'desktop' || desktopLoadAttempted || desktopLoading) return;
     void loadDesktopAgents();
-  }, [isOpen, mode, desktopAgents.length, desktopLoading]);
+  }, [isOpen, mode, desktopLoadAttempted, desktopLoading]);
+
+  useEffect(() => {
+    if (!agentSelectOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!agentSelectRef.current?.contains(event.target as Node)) setAgentSelectOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, [agentSelectOpen]);
 
   useEffect(() => {
     if (!isOpen || mode !== 'desktop' || !selectedDesktopAgentId) {
@@ -298,6 +318,7 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
   const handleDesktopAgentChange = (agentId: string) => {
     const agent = desktopAgents.find((item) => item.id === agentId) || null;
     setSelectedDesktopAgentId(agentId);
+    setAgentSelectOpen(false);
     setDesktopError('');
     setDesktopStatus({ state: 'idle', speaking: false });
     setDesktopMessages([createDesktopAgentWelcomeMessage(agent)]);
@@ -316,8 +337,7 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="flex h-[70vh] w-[600px] flex-col overflow-hidden rounded-xl border border-panel-border bg-panel-bg shadow-2xl">
+    <FloatingWindow contentClassName="h-[70vh] w-[600px] flex-col">
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
           <div className="flex items-center gap-2">
             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-accent/20">
@@ -364,17 +384,42 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
               >
                 {desktopManifestLoading ? '资源：加载中' : `资源：${desktopAnimationLabel}${desktopAnimation.fallback ? ' / fallback' : ''}`}
               </span>
-              <select
-                value={selectedDesktopAgentId}
-                onChange={(event) => handleDesktopAgentChange(event.target.value)}
-                disabled={desktopLoading || !desktopAgents.length}
-                className="max-w-[190px] rounded-md border border-panel-border bg-canvas-bg px-2 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-              >
-                {!desktopAgents.length && <option value="">暂无 Agent</option>}
-                {desktopAgents.map((agent) => (
-                  <option key={agent.id} value={agent.id}>{agent.name || agent.id}</option>
-                ))}
-              </select>
+              <div ref={agentSelectRef} className="relative w-[180px]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!desktopLoading && desktopAgents.length) setAgentSelectOpen((current) => !current);
+                  }}
+                  disabled={desktopLoading || !desktopAgents.length}
+                  className={cn(
+                    'flex h-8 w-full items-center gap-2 rounded-md border border-panel-border bg-canvas-bg px-2.5 text-left text-xs text-white transition-colors',
+                    agentSelectOpen ? 'border-accent' : 'hover:border-gray-600',
+                    (desktopLoading || !desktopAgents.length) && 'cursor-not-allowed opacity-60 hover:border-panel-border'
+                  )}
+                >
+                  <span className="min-w-0 flex-1 truncate">{selectedDesktopAgentLabel}</span>
+                  <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', agentSelectOpen && 'rotate-180')} />
+                </button>
+
+                {agentSelectOpen && (
+                  <div className="absolute right-0 top-[calc(100%+6px)] z-50 max-h-64 w-full overflow-auto rounded-lg border border-panel-border bg-[#0c0f12] p-1.5 shadow-2xl">
+                    {desktopAgents.map((agent) => (
+                      <button
+                        key={agent.id}
+                        type="button"
+                        onClick={() => handleDesktopAgentChange(agent.id)}
+                        className={cn(
+                          'flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors hover:bg-[#151a20]',
+                          agent.id === selectedDesktopAgentId && 'bg-accent/10 text-accent'
+                        )}
+                      >
+                        <span className="truncate text-xs font-medium">{agent.name || agent.id}</span>
+                        {agent.name && <span className="mt-0.5 max-w-full truncate text-[10px] text-gray-500">{agent.id}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               <button
                 onClick={loadDesktopAgents}
                 disabled={desktopLoading || desktopSending}
@@ -469,7 +514,6 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
             </button>
           </div>
         </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }

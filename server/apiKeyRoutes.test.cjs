@@ -270,8 +270,15 @@ test('api key create, update, and delete write safe audit logs', () => {
 
   assert.equal(updateRes.statusCode, 200);
   const updateLog = listAuditLogs().find((log) => log.action === 'api_key.update' && log.targetId === createdKeyId);
+  assert.equal(updateLog.metadata.operation, 'update');
+  assert.equal(updateLog.metadata.previousProviderId, 'openai-compatible');
+  assert.equal(updateLog.metadata.providerId, 'openai-compatible');
+  assert.equal(updateLog.metadata.changedProvider, false);
   assert.equal(updateLog.metadata.changedName, true);
+  assert.equal(updateLog.metadata.changedBaseUrl, false);
   assert.equal(updateLog.metadata.changedSecret, true);
+  assert.equal(updateLog.metadata.previousIsEnabled, true);
+  assert.equal(updateLog.metadata.isEnabled, false);
   assert.equal(updateLog.metadata.changedEnabled, true);
   assert.equal(JSON.stringify(updateLog.metadata).includes('sk-update-secret'), false);
   assert.equal(JSON.stringify(updateLog.metadata).includes('encrypted:'), false);
@@ -322,9 +329,73 @@ test('api key upsert with an existing id writes an update audit log', () => {
   assert.equal(listAuditLogs().some((log) =>
     log.action === 'api_key.update' &&
     log.targetId === existing.id &&
+    log.metadata.operation === 'update' &&
+    log.metadata.previousProviderId === 'openai-compatible' &&
+    log.metadata.providerId === 'openai-compatible' &&
+    log.metadata.changedProvider === false &&
+    log.metadata.changedName === true &&
     log.metadata.changedSecret === true
   ), true);
   assert.equal(listAuditLogs().some((log) => log.action === 'api_key.create' && log.targetId === existing.id), false);
+});
+
+test('api key update audit only marks fields that actually changed', () => {
+  const user = createUser({
+    email: 'key-noop-audit@example.com',
+    username: 'key-noop-audit@example.com',
+    name: 'Key Noop Audit User',
+    passwordHash: 'test',
+  });
+  const existing = upsertApiKey({
+    id: 'noop-audit-key',
+    ownerUserId: user.id,
+    keyScope: 'user',
+    providerId: 'seedance',
+    name: 'Noop Key',
+    baseUrl: 'https://api.example.com',
+    encryptedKey: 'encrypted:old',
+    isEnabled: true,
+  });
+  const app = registerRoutesFor(user.id, 5);
+  const route = app.routes.find((item) => item.method === 'PATCH' && item.pathname === '/api/api-keys/:apiKeyId');
+
+  const res = createMockRes();
+  route.handler({
+    params: { apiKeyId: existing.id },
+    body: {
+      providerId: 'seedance',
+      name: 'Noop Key',
+      baseUrl: 'https://api.example.com',
+      isEnabled: true,
+    },
+  }, res);
+
+  assert.equal(res.statusCode, 200);
+  const updateLog = listAuditLogs().find((log) => log.action === 'api_key.update' && log.targetId === existing.id);
+  assert.deepEqual({
+    operation: updateLog.metadata.operation,
+    previousProviderId: updateLog.metadata.previousProviderId,
+    providerId: updateLog.metadata.providerId,
+    changedProvider: updateLog.metadata.changedProvider,
+    changedName: updateLog.metadata.changedName,
+    changedBaseUrl: updateLog.metadata.changedBaseUrl,
+    changedSecret: updateLog.metadata.changedSecret,
+    previousIsEnabled: updateLog.metadata.previousIsEnabled,
+    isEnabled: updateLog.metadata.isEnabled,
+    changedEnabled: updateLog.metadata.changedEnabled,
+  }, {
+    operation: 'update',
+    previousProviderId: 'seedance',
+    providerId: 'seedance',
+    changedProvider: false,
+    changedName: false,
+    changedBaseUrl: false,
+    changedSecret: false,
+    previousIsEnabled: true,
+    isEnabled: true,
+    changedEnabled: false,
+  });
+  assert.equal(JSON.stringify(updateLog.metadata).includes('encrypted:'), false);
 });
 
 test('api key server scoped keys require admin for create, update, delete, and test', async () => {

@@ -28,6 +28,7 @@ export interface WorkflowProject {
 }
 
 export type WorkflowStorageLocation = 'remote' | 'local';
+export type WorkflowStorageMode = 'auto' | 'local' | 'server';
 
 export interface WorkflowMutationResult {
   storage: WorkflowStorageLocation;
@@ -86,6 +87,7 @@ function errorMessage(error: unknown): string {
 }
 
 function shouldUseLocalFallback(error: unknown): boolean {
+  if (workflowStorageMode === 'server') return false;
   if (!localWorkflowStore.canUse()) return false;
   const message = errorMessage(error);
   return message.includes('Failed to fetch') || message.includes('NetworkError') || message.includes('Load failed');
@@ -307,18 +309,27 @@ const indexedDbWorkflowStore: WorkflowLocalStore = {
 
 let remoteWorkflowApi = defaultRemoteWorkflowApi;
 let localWorkflowStore = indexedDbWorkflowStore;
+let workflowStorageMode: WorkflowStorageMode = 'auto';
+
+export function setWorkflowStorageMode(mode: 'local' | 'server' | string): void {
+  workflowStorageMode = mode === 'server' ? 'server' : 'local';
+}
 
 export function configureWorkflowDbAdaptersForTests(options: {
   remoteApi?: Partial<WorkflowRemoteApi>;
   localStore?: Partial<WorkflowLocalStore>;
+  storageMode?: WorkflowStorageMode;
 } = {}): () => void {
   const previousRemoteApi = remoteWorkflowApi;
   const previousLocalStore = localWorkflowStore;
+  const previousWorkflowStorageMode = workflowStorageMode;
   remoteWorkflowApi = { ...defaultRemoteWorkflowApi, ...options.remoteApi };
   localWorkflowStore = { ...indexedDbWorkflowStore, ...options.localStore };
+  workflowStorageMode = options.storageMode ?? 'auto';
   return () => {
     remoteWorkflowApi = previousRemoteApi;
     localWorkflowStore = previousLocalStore;
+    workflowStorageMode = previousWorkflowStorageMode;
   };
 }
 

@@ -30,6 +30,108 @@ test('deployment check accepts split frontend/backend configuration', () => {
   assert.deepEqual(report.errors, []);
 });
 
+test('deployment check accepts gateway upstream service origins', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_PUBLIC_BASE_URL: 'https://api.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_GATEWAY_AUTH_URL: 'http://127.0.0.1:4101',
+    WORKBENCH_GATEWAY_WORKER_URL: 'http://127.0.0.1:4102',
+    WORKBENCH_GATEWAY_ASSET_URL: 'http://127.0.0.1:4103',
+    WORKBENCH_GATEWAY_MODEL_URL: 'http://127.0.0.1:4104',
+    WORKBENCH_GATEWAY_WORKFLOW_URL: 'http://127.0.0.1:4105',
+  });
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.errors, []);
+});
+
+test('deployment check warns when loopback gateway upstreams omit the internal token', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_PUBLIC_BASE_URL: 'https://api.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_GATEWAY_WORKER_URL: 'http://127.0.0.1:4102',
+  });
+
+  assert.equal(report.ok, true);
+  assert.equal(report.warnings.some((warning) => warning.includes('WORKBENCH_INTERNAL_SERVICE_TOKEN')), true);
+});
+
+test('deployment check requires an internal token for remote gateway upstreams', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_PUBLIC_BASE_URL: 'https://api.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_GATEWAY_WORKER_URL: 'http://10.0.0.12:4102',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('WORKBENCH_INTERNAL_SERVICE_TOKEN')), true);
+});
+
+test('deployment check accepts remote gateway upstreams with an internal token', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_PUBLIC_BASE_URL: 'https://api.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_GATEWAY_WORKER_URL: 'http://10.0.0.12:4102',
+    WORKBENCH_INTERNAL_SERVICE_TOKEN: 'internal-token',
+  });
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.errors, []);
+});
+
+test('deployment check rejects wildcard gateway upstream hosts', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_PUBLIC_BASE_URL: 'https://api.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_GATEWAY_WORKER_URL: 'http://0.0.0.0:4102',
+    WORKBENCH_INTERNAL_SERVICE_TOKEN: 'internal-token',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('wildcard bind hosts')), true);
+});
+
+test('deployment check rejects gateway upstream URLs with paths', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_PUBLIC_BASE_URL: 'https://api.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_GATEWAY_WORKFLOW_URL: 'http://127.0.0.1:4105/api',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('WORKBENCH_GATEWAY_WORKFLOW_URL must be an origin only')), true);
+});
+
 test('deployment check rejects missing split deployment API settings', () => {
   const report = checkDeploymentConfig({
     ...baseServerEnv,
@@ -41,6 +143,20 @@ test('deployment check rejects missing split deployment API settings', () => {
   assert.equal(report.ok, false);
   assert.equal(report.errors.some((error) => error.includes('VITE_PROXY_URL=/')), true);
   assert.equal(report.errors.some((error) => error.includes('WORKBENCH_CORS_ORIGIN')), true);
+});
+
+test('deployment check rejects empty production frontend API origin', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: '',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('VITE_PROXY_URL is required')), true);
 });
 
 test('deployment check rejects using the backend API origin as CORS origin', () => {
@@ -194,6 +310,68 @@ test('deployment check rejects direct API keys in server mode', () => {
 
   assert.equal(report.ok, false);
   assert.equal(report.errors.some((error) => error.includes('WORKBENCH_ALLOW_DIRECT_API_KEYS')), true);
+});
+
+test('deployment check rejects private media fetch bypass in server mode', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_ALLOW_PRIVATE_MEDIA_FETCH: 'true',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('WORKBENCH_ALLOW_PRIVATE_MEDIA_FETCH')), true);
+});
+
+test('deployment check rejects wildcard internal service hosts', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_ASSET_SERVICE_HOST: '0.0.0.0',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('WORKBENCH_ASSET_SERVICE_HOST must not bind')), true);
+});
+
+test('deployment check requires an internal token for non-loopback internal service hosts', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_MODEL_SERVICE_HOST: '10.0.0.20',
+  });
+
+  assert.equal(report.ok, false);
+  assert.equal(report.errors.some((error) => error.includes('WORKBENCH_MODEL_SERVICE_HOST is not loopback')), true);
+});
+
+test('deployment check accepts non-loopback internal service hosts with an internal token but warns', () => {
+  const report = checkDeploymentConfig({
+    ...baseServerEnv,
+    WORKBENCH_SERVE_STATIC: 'false',
+    VITE_PROXY_URL: 'https://api.example.com',
+    WORKBENCH_CORS_ORIGIN: 'https://workbench.example.com',
+    WORKBENCH_COOKIE_SAMESITE: 'None',
+    WORKBENCH_COOKIE_SECURE: 'true',
+    WORKBENCH_MODEL_SERVICE_HOST: '10.0.0.20',
+    WORKBENCH_INTERNAL_SERVICE_TOKEN: 'internal-token',
+  });
+
+  assert.equal(report.ok, true);
+  assert.deepEqual(report.errors, []);
+  assert.equal(report.warnings.some((warning) => warning.includes('WORKBENCH_MODEL_SERVICE_HOST is not loopback')), true);
 });
 
 test('deployment check rejects example bootstrap admin password', () => {

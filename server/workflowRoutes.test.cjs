@@ -12,6 +12,7 @@ const {
   createUser,
   db,
   getWorkflowForUser,
+  listAuditLogs,
   listWorkflowVersions,
 } = require('./db.cjs');
 const {
@@ -50,6 +51,14 @@ function createMockRes() {
       this.body = body;
       return this;
     },
+  };
+}
+
+function workflowAuditReq(req = {}) {
+  return {
+    headers: { 'user-agent': 'Workflow Route Audit Browser/1.0' },
+    socket: { remoteAddress: '203.0.113.45' },
+    ...req,
   };
 }
 
@@ -460,6 +469,103 @@ test('workflow CRUD and duplication stay isolated by user id', () => {
   }, ownerDeleteRes);
   assert.equal(ownerDeleteRes.statusCode, 200);
   assert.equal(getWorkflowForUser('crud-private-workflow', owner.id), null);
+});
+
+test('workflow mutating routes write safe audit logs with request context', () => {
+  const owner = createUser({
+    email: 'workflow-route-audit-owner@example.com',
+    username: 'workflow-route-audit-owner@example.com',
+    name: 'Workflow Route Audit Owner',
+    passwordHash: 'test',
+  });
+  const app = registerRoutesFor(owner.id);
+
+  const createRes = createMockRes();
+  route(app, 'POST', '/api/workflows').handler(workflowAuditReq({
+    body: {
+      id: 'route-audit-workflow',
+      name: 'Route Audit Flow',
+      nodes: [{ id: 'node-a', type: 'textInput' }],
+      edges: [],
+    },
+  }), createRes);
+  assert.equal(createRes.statusCode, 201);
+
+  const updateRes = createMockRes();
+  route(app, 'PUT', '/api/workflows/:workflowId').handler(workflowAuditReq({
+    params: { workflowId: 'route-audit-workflow' },
+    body: {
+      name: 'Route Audit Flow v2',
+      nodes: [
+        { id: 'node-a', type: 'textInput' },
+        { id: 'node-b', type: 'preview' },
+      ],
+      edges: [{ id: 'edge-a-b', source: 'node-a', target: 'node-b' }],
+    },
+  }), updateRes);
+  assert.equal(updateRes.statusCode, 200);
+
+  const versions = listWorkflowVersions('route-audit-workflow', owner.id);
+  const firstVersion = versions.find((version) => version.versionNumber === 1);
+  assert.ok(firstVersion);
+
+  const restoreRes = createMockRes();
+  route(app, 'POST', '/api/workflows/:workflowId/versions/:versionId/restore').handler(workflowAuditReq({
+    params: {
+      workflowId: 'route-audit-workflow',
+      versionId: firstVersion.id,
+    },
+  }), restoreRes);
+  assert.equal(restoreRes.statusCode, 200);
+
+  const duplicateVersionRes = createMockRes();
+  route(app, 'POST', '/api/workflows/:workflowId/versions/:versionId/duplicate').handler(workflowAuditReq({
+    params: {
+      workflowId: 'route-audit-workflow',
+      versionId: firstVersion.id,
+    },
+  }), duplicateVersionRes);
+  assert.equal(duplicateVersionRes.statusCode, 201);
+
+  const duplicateRes = createMockRes();
+  route(app, 'POST', '/api/workflows/:workflowId/duplicate').handler(workflowAuditReq({
+    params: { workflowId: 'route-audit-workflow' },
+  }), duplicateRes);
+  assert.equal(duplicateRes.statusCode, 201);
+
+  const deleteRes = createMockRes();
+  route(app, 'DELETE', '/api/workflows/:workflowId').handler(workflowAuditReq({
+    params: { workflowId: 'route-audit-workflow' },
+  }), deleteRes);
+  assert.equal(deleteRes.statusCode, 200);
+
+  const auditLogs = listAuditLogs({
+    actorUserId: owner.id,
+    limit: 20,
+    targetType: 'workflow',
+  });
+  const auditActions = auditLogs.map((log) => log.action).sort();
+
+  assert.deepEqual(auditActions, [
+    'workflow.create',
+    'workflow.delete',
+    'workflow.duplicate',
+    'workflow.update',
+    'workflow.version_duplicate',
+    'workflow.version_restore',
+  ].sort());
+  assert.equal(auditLogs.every((log) => log.actorUserId === owner.id), true);
+  assert.equal(auditLogs.every((log) => log.ipAddress === '203.0.113.45'), true);
+  assert.equal(auditLogs.every((log) => log.userAgent === 'Workflow Route Audit Browser/1.0'), true);
+  assert.equal(JSON.stringify(auditLogs).includes('"nodes"'), false);
+  assert.equal(JSON.stringify(auditLogs).includes('"edges"'), false);
+
+  const logsByAction = new Map(auditLogs.map((log) => [log.action, log]));
+  assert.equal(logsByAction.get('workflow.create').metadata.nodeCount, 1);
+  assert.equal(logsByAction.get('workflow.update').metadata.previousNodeCount, 1);
+  assert.equal(logsByAction.get('workflow.version_restore').metadata.versionNumber, 1);
+  assert.equal(logsByAction.get('workflow.version_duplicate').metadata.copiedFromVersionId, firstVersion.id);
+  assert.equal(logsByAction.get('workflow.delete').targetId, 'route-audit-workflow');
 });
 
 test('workflow version can be duplicated into a new workflow with user isolation', () => {

@@ -7,6 +7,7 @@ import {
   isNodeRunImageAsset,
   shortNodeRunTaskId,
   summarizeNodeRunForDisplay,
+  uniqueNodeRunAssetIds,
 } from './nodeRunDisplay';
 
 test('node run display formats status, duration, and task id', () => {
@@ -47,4 +48,16 @@ test('node run display detects image assets by type or filename', () => {
   assert.equal(isNodeRunImageAsset({ type: 'image', url: '/api/assets/1' }), true);
   assert.equal(isNodeRunImageAsset({ type: 'asset', url: '/api/assets/1.webp' }), true);
   assert.equal(isNodeRunImageAsset({ type: 'video', url: '/api/assets/1.mp4' }), false);
+});
+
+test('node run display deduplicates addable asset ids', () => {
+  assert.deepEqual(
+    uniqueNodeRunAssetIds([
+      { id: 'asset-a', type: 'image', url: '/api/assets/asset-a' },
+      { id: '', type: 'image', url: '/api/assets/no-id' },
+      { id: 'asset-a', type: 'image', url: '/api/assets/asset-a-copy' },
+      { id: 'asset-b', type: 'video', url: '/api/assets/asset-b' },
+    ]),
+    ['asset-a', 'asset-b']
+  );
 });

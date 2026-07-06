@@ -27,6 +27,7 @@ import {
 import { cn } from '../../lib/utils';
 import { loadAllAssetCollections } from '../../lib/assetCollectionCache';
 import { isSelectableImageAsset } from '../../lib/imageAssetSelection';
+import { clearImageInputConfig, imageInputConfigFromAsset } from '../../lib/imageInputConfig';
 import { loadCachedModelCapabilities } from '../../lib/modelCapabilityCache';
 import { resolveModelCapabilities, summarizeModelCapabilityBadges } from '../../lib/modelCapabilities';
 import { isNodeRunImageAsset } from '../../lib/nodeRunDisplay';
@@ -274,12 +275,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
           prompt: data.config.prompt || '',
         });
         updateNodeData(id, {
-          config: {
-            ...data.config,
-            url: asset.url,
-            fileName: asset.fileName || file.name,
-            assetId: asset.id,
-          },
+          config: imageInputConfigFromAsset(data.config, { ...asset, fileName: asset.fileName || file.name }),
         });
       } catch (error) {
         setUploadError(error instanceof Error ? error.message : '图片上传失败');
@@ -338,13 +334,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   const handleSelectLibraryAsset = useCallback(
     (asset: ProxyAsset) => {
       updateNodeData(id, {
-        config: {
-          ...data.config,
-          url: asset.url,
-          fileName: asset.fileName || asset.prompt || asset.id,
-          assetId: asset.id,
-          prompt: data.config.prompt || asset.prompt || '',
-        },
+        config: imageInputConfigFromAsset(data.config, asset),
       });
       setShowImageLibrary(false);
     },
@@ -481,7 +471,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
             onOpenPreview={() => openPreview(proxyAssetUrl(data.config.url), data.config.fileName || '参考图')}
             onRemoveImage={() => {
               setShowImageLibrary(false);
-              updateNodeData(id, { config: { ...data.config, url: '', fileName: '', assetId: '' } });
+              updateNodeData(id, { config: clearImageInputConfig(data.config) });
             }}
           />
         )}

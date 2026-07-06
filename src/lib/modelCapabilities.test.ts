@@ -108,6 +108,7 @@ test('model capability descriptions expose video modes, fps, rate limits, and ta
       maxReferenceImages: 2,
       maxReferenceVideos: 1,
       maxReferenceAudios: 1,
+      maxMediaFiles: 12,
       supportsReferenceImage: true,
       supportsReferenceVideo: true,
       supportsReferenceAudio: true,
@@ -120,19 +121,73 @@ test('model capability descriptions expose video modes, fps, rate limits, and ta
       rpm: 180,
       taskTypes: ['multimodal_video_generation', 'video_extension'],
       mediaTypes: ['first_frame', 'last_frame'],
+      promptMaxChars: 800,
+      negativePromptMaxChars: 500,
+      autoAudioByDefault: true,
+      audioFormats: ['mp3', 'wav'],
+      audioDurationMin: 2,
+      audioDurationMax: 30,
+      audioMaxFileMb: 15,
+      imageFormats: ['jpg', 'png'],
+      imageMinSide: 300,
+      imageMaxSide: 5000,
+      imageMaxFileMb: 10,
+      videoFormats: ['mp4'],
+      videoMaxFileMb: 100,
+      outputFormats: ['mp4', 'H.264'],
+      resultUrlTtlHours: 24,
+      queryRps: 20,
     },
   });
 
   assert.deepEqual(
-    rows.filter((row) => ['模式', '帧率', '参考视频', '参考音频', '频控', '任务类型', '媒体类型'].includes(row.label)),
+    rows.filter((row) => [
+      '模式',
+      '帧率',
+      '自动音频',
+      '参考视频',
+      '参考音频',
+      '参考素材总数',
+      '频控',
+      '任务类型',
+      '媒体类型',
+      '提示词长度',
+      '反向词长度',
+      '参考音频格式',
+      '参考音频时长',
+      '参考音频大小',
+      '参考图片格式',
+      '参考图片边长',
+      '参考图片大小',
+      '参考视频格式',
+      '参考视频大小',
+      '输出格式',
+      '结果链接有效期',
+      '查询频控',
+    ].includes(row.label)),
     [
       { label: '模式', value: 'image-to-video / video-extension' },
       { label: '帧率', value: '24 fps' },
       { label: '参考视频', value: '支持，最多 1 个' },
       { label: '参考音频', value: '支持，最多 1 个' },
+      { label: '参考素材总数', value: '最多 12 个' },
+      { label: '自动音频', value: '支持' },
       { label: '频控', value: '并发 3 / RPM 180' },
       { label: '任务类型', value: 'multimodal_video_generation / video_extension' },
       { label: '媒体类型', value: 'first_frame / last_frame' },
+      { label: '提示词长度', value: '800 字' },
+      { label: '反向词长度', value: '500 字' },
+      { label: '参考音频格式', value: 'mp3 / wav' },
+      { label: '参考音频时长', value: '2-30 秒' },
+      { label: '参考音频大小', value: '15 MB' },
+      { label: '参考图片格式', value: 'jpg / png' },
+      { label: '参考图片边长', value: '300-5000 px' },
+      { label: '参考图片大小', value: '10 MB' },
+      { label: '参考视频格式', value: 'mp4' },
+      { label: '参考视频大小', value: '100 MB' },
+      { label: '输出格式', value: 'mp4 / H.264' },
+      { label: '结果链接有效期', value: '24 小时' },
+      { label: '查询频控', value: '20 RPS' },
     ]
   );
 });
@@ -190,6 +245,7 @@ test('model capability usage summarizes current video request limits', () => {
         maxReferenceImages: 3,
         maxReferenceVideos: 1,
         maxReferenceAudios: 1,
+        maxMediaFiles: 2,
         supportsReferenceImage: true,
         supportsReferenceVideo: true,
         supportsReferenceAudio: true,
@@ -205,6 +261,7 @@ test('model capability usage summarizes current video request limits', () => {
     { label: '分辨率', value: '1080P', tone: 'warning' },
     { label: '参考视频', value: '0 / 1 个', tone: 'neutral' },
     { label: '参考音频', value: '0 / 1 个', tone: 'neutral' },
+    { label: '参考素材总数', value: '2 / 2 个', tone: 'success' },
   ]);
 });
 
@@ -400,5 +457,39 @@ test('model capability validation catches video duration max and unsupported ref
       '时长太长：最长 15 秒。',
       '当前模型不支持参考图。',
     ]
+  );
+});
+
+test('model capability validation catches combined reference media count', () => {
+  assert.deepEqual(
+    validateNodeCapabilityUsage(
+      'videoGen',
+      { duration: 6, aspectRatio: '16:9', resolution: '720P' },
+      {
+        images: [imageA, imageB],
+        referenceVideos: [
+          { type: 'video', id: 'video-a', url: 'https://example.com/a.mp4', createdAt: '2026-07-05T00:00:00.000Z' },
+          { type: 'video', id: 'video-b', url: 'https://example.com/b.mp4', createdAt: '2026-07-05T00:00:00.000Z' },
+        ],
+        referenceAudios: ['https://example.com/a.mp3'],
+      },
+      {
+        videoGeneration: true,
+        video: {
+          durationMin: 4,
+          durationMax: 15,
+          ratios: ['16:9'],
+          resolutions: ['720P'],
+          supportsReferenceImage: true,
+          supportsReferenceVideo: true,
+          supportsReferenceAudio: true,
+          maxReferenceImages: 9,
+          maxReferenceVideos: 3,
+          maxReferenceAudios: 3,
+          maxMediaFiles: 4,
+        },
+      }
+    ),
+    ['参考素材总数超过限制：最多 4 个。']
   );
 });

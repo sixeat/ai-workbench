@@ -4,6 +4,8 @@
 
 ## 5 分钟版
 
+如果你还没决定用哪种方式部署，先看 [部署模式清单](./deployment-modes.md)。它把本地开发、单机服务器、API/Worker 分进程三种模式分开说明。
+
 先把后端作为 API 服务跑起来：
 
 ```bash
@@ -130,6 +132,20 @@ npm run check:deploy
 
 `WORKBENCH_PUBLIC_BASE_URL` 用于把本地资产 URL 转成第三方模型可访问的公网 URL。分离部署时它通常应该指向后端 API 域名，而不是前端静态页面域名。
 
+代码里有一组分离部署运行时测试：`server/appSplitDeployment.test.cjs`。它会验证三件事：
+
+| 验证项 | 通过标准 |
+| --- | --- |
+| API-only 模式 | `WORKBENCH_SERVE_STATIC=false` 时，`/` 和 `/index.html` 返回 `404` |
+| CORS 凭证 | 只有 `WORKBENCH_CORS_ORIGIN` 配置的前端域名能拿到 credential 响应头 |
+| 跨域登录 Cookie | 登录 Cookie 带 `HttpOnly`、`SameSite=None`、`Secure` 和 `Domain` |
+
+改动前后端分离配置后，建议至少跑一次：
+
+```bash
+node --test server/appSplitDeployment.test.cjs
+```
+
 ## Cookie 和登录
 
 同域部署可以使用默认配置：
@@ -189,6 +205,7 @@ WORKBENCH_REQUIRE_INVITATION_CODE=false
 | `WORKBENCH_EMAIL_CODE_WINDOW_MS` | `3600000` | 限流窗口，默认 1 小时 |
 | `WORKBENCH_EMAIL_CODE_EMAIL_LIMIT` | `3` | 同一邮箱在窗口内最多请求次数 |
 | `WORKBENCH_EMAIL_CODE_IP_LIMIT` | `20` | 同一 IP 在窗口内最多请求次数 |
+| `WORKBENCH_EMAIL_CODE_MAX_VERIFY_ATTEMPTS` | `5` | 同一验证码最多允许输错次数，超过后必须重新获取 |
 
 ## 任务队列并发
 
@@ -204,7 +221,22 @@ WORKBENCH_REQUIRE_INVITATION_CODE=false
 ```bash
 WORKBENCH_TEXT_QUEUE_CONCURRENCY=2
 WORKBENCH_GENERATION_QUEUE_CONCURRENCY=2
+WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS=1000
 ```
+
+启动方式：
+
+| 命令 | 作用 | 适合场景 |
+| --- | --- | --- |
+| `npm run start:api` | 只启动 HTTP API，不消费生成任务 | API 和 worker 分进程部署 |
+| `npm run start:worker` | 不启动 HTTP，只消费 `queued` 任务 | 后台 worker 进程 |
+| `npm run start:all` | HTTP API 和本地 worker 同进程 | 本地调试或小型单机部署 |
+
+分进程部署时，API 和 worker 必须连接同一个 SQLite 数据库和同一个 `outputs` 目录。API 创建任务后立即返回 `taskId`，worker 会按 `WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS` 扫描数据库，发现 `queued` 任务后继续执行。
+
+代码边界上，`server/api.cjs` 只负责关闭本进程 worker 并启动 HTTP API。`server/worker.cjs` 不加载 Express app，也不依赖 routes。这个规则由 `server/processBoundary.test.cjs` 检查。
+
+运行边界上，`server/splitProcessRuntime.test.cjs` 会真实启动 API 进程和 Worker 进程。测试覆盖 Worker 先启动，API 后创建文本、图片、视频任务，Worker 再从数据库消费任务的场景。
 
 先保持默认值。只有当服务器 CPU、内存、上游 API 额度都稳定时，再逐步调大。
 
@@ -265,6 +297,49 @@ curl http://127.0.0.1:3000/api/admin/health \
 
 `/api/health` 只适合判断服务是否可用。数据库路径、输出目录等敏感信息只放在 `/api/admin/health`。
 
+## 网关请求日志
+
+后端内部已经有轻量 Gateway 层。它集中处理 CORS、Cookie/Session 鉴权、限流、请求日志、API 404 和统一错误响应。
+
+默认不打印每个请求，避免日志太吵。需要排查线上问题时可以临时打开：
+
+```bash
+WORKBENCH_GATEWAY_REQUEST_LOGS=true
+```
+
+日志会记录请求方法、路径、状态码、耗时、请求 ID、命中的未来服务边界。它不会记录 query、Cookie、Authorization 或 API Key。
+
+## 网关路由转发
+
+默认保持单体运行，不需要配置上游地址：
+
+```bash
+WORKBENCH_GATEWAY_AUTH_URL=
+WORKBENCH_GATEWAY_WORKER_URL=
+WORKBENCH_GATEWAY_ASSET_URL=
+WORKBENCH_GATEWAY_MODEL_URL=
+WORKBENCH_GATEWAY_WORKFLOW_URL=
+```
+
+以后拆出内部服务时，再逐项配置。值必须是 origin，不要带 `/api`、路径、query 或 hash。
+
+| 配置项 | 转发路由 | 目标服务 |
+| --- | --- | --- |
+| `WORKBENCH_GATEWAY_AUTH_URL` | `/api/auth/*` | `auth-service` |
+| `WORKBENCH_GATEWAY_WORKER_URL` | `/api/tasks/*`、`/api/images/*`、`/api/videos/*` | `worker-service` |
+| `WORKBENCH_GATEWAY_ASSET_URL` | `/api/assets/*` | `asset-service` |
+| `WORKBENCH_GATEWAY_MODEL_URL` | `/api/models/*`、`/api/api-keys/*`、`/api/chat`、`/api/claude` | `model-service` |
+| `WORKBENCH_GATEWAY_WORKFLOW_URL` | `/api/workflows/*` | `workflow-service` |
+
+示例：
+
+```bash
+WORKBENCH_GATEWAY_WORKER_URL=http://127.0.0.1:4102
+```
+
+> [!WARNING]
+> 这些上游服务应该只监听内网、VPC 或 `127.0.0.1`，不要直接暴露公网。公网统一入口仍然是 Gateway。
+
 ## 数据目录
 
 先创建持久化目录：
@@ -294,6 +369,97 @@ pm2 status
 pm2 logs ai-workbench --lines 80
 pm2 restart ai-workbench
 pm2 stop ai-workbench
+```
+
+## 拆分服务启动示例
+
+当你想把登录鉴权、生成任务、素材服务、模型服务和工作流服务从主 API 中拆出来时，可以先用六进程部署：
+
+```bash
+npm run start:api
+npm run start:auth-service
+npm run start:worker-service
+npm run start:asset-service
+npm run start:model-service
+npm run start:workflow-service
+```
+
+主 API/Gateway 进程配置：
+
+```bash
+WORKBENCH_GATEWAY_AUTH_URL=http://127.0.0.1:3004
+WORKBENCH_GATEWAY_WORKER_URL=http://127.0.0.1:3001
+WORKBENCH_GATEWAY_ASSET_URL=http://127.0.0.1:3002
+WORKBENCH_GATEWAY_MODEL_URL=http://127.0.0.1:3003
+WORKBENCH_GATEWAY_WORKFLOW_URL=http://127.0.0.1:3005
+```
+
+内部服务配置：
+
+```bash
+WORKBENCH_AUTH_SERVICE_HOST=127.0.0.1
+WORKBENCH_AUTH_SERVICE_PORT=3004
+WORKBENCH_WORKER_SERVICE_HOST=127.0.0.1
+WORKBENCH_WORKER_SERVICE_PORT=3001
+WORKBENCH_ASSET_SERVICE_HOST=127.0.0.1
+WORKBENCH_ASSET_SERVICE_PORT=3002
+WORKBENCH_MODEL_SERVICE_HOST=127.0.0.1
+WORKBENCH_MODEL_SERVICE_PORT=3003
+WORKBENCH_MODEL_SERVICE_START_QUEUE=false
+WORKBENCH_WORKFLOW_SERVICE_HOST=127.0.0.1
+WORKBENCH_WORKFLOW_SERVICE_PORT=3005
+```
+
+如果内部服务跨机器部署，再给 Gateway 和内部服务配置同一个内部 token：
+
+```bash
+WORKBENCH_INTERNAL_SERVICE_TOKEN=换成一段随机长字符串
+```
+
+> [!WARNING]
+> `auth-service`、`worker-service`、`asset-service`、`model-service` 和 `workflow-service` 不应该直接暴露公网。它们只应该让 Gateway、内网或本机访问。
+
+## 使用 PM2 ecosystem 配置
+
+仓库已经提供 `ecosystem.config.cjs`。它会启动 6 个进程：
+
+| 进程名 | 脚本 | 作用 |
+| --- | --- | --- |
+| `ai-workbench-api` | `server/api.cjs` | 公网 API / Gateway 入口 |
+| `ai-workbench-auth-service` | `server/authService.cjs` | 登录、注册、Session、用户管理 |
+| `ai-workbench-worker-service` | `server/workerService.cjs` | 任务、图片、视频和队列消费 |
+| `ai-workbench-asset-service` | `server/assetService.cjs` | 素材、上传、图片读取、素材集合 |
+| `ai-workbench-model-service` | `server/modelService.cjs` | 模型、API Key、模型能力、文本任务 |
+| `ai-workbench-workflow-service` | `server/workflowService.cjs` | 工作流保存、版本、恢复和复制 |
+
+启动前先配置 `.env`。真实 Key、SMTP 密码、`WORKBENCH_KEY_SECRET` 和 `WORKBENCH_INTERNAL_SERVICE_TOKEN` 都放在 `.env`，不要写进 `ecosystem.config.cjs`。
+
+```bash
+cd /home/admin/apps/ai-workbench
+npm install
+npm run build
+npm run check:deploy
+pm2 start ecosystem.config.cjs
+pm2 save
+```
+
+查看状态：
+
+```bash
+pm2 status
+pm2 logs ai-workbench-api --lines 80
+pm2 logs ai-workbench-worker-service --lines 80
+```
+
+更新代码后重启：
+
+```bash
+cd /home/admin/apps/ai-workbench
+npm install
+npm run build
+npm run check:deploy
+pm2 reload ecosystem.config.cjs
+pm2 save
 ```
 
 设置开机自启：

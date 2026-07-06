@@ -1,4 +1,6 @@
-const { listModelCapabilities, upsertModelCapability } = require('./db.cjs');
+const {
+  modelCapabilityRepository: defaultModelCapabilityRepository,
+} = require('./repositories/modelCapabilityRepository.cjs');
 
 const BASE_CAPABILITIES = {
   chat: true,
@@ -78,10 +80,19 @@ const DEFAULT_CAPABILITY_RULES = [
       multiImageReference: true,
       videoGeneration: true,
       video: {
+        modes: ['text-to-video', 'image-to-video', 'images-to-video', 'video-editing', 'video-extension'],
         supportsAudioGeneration: true,
         supportsReferenceImage: true,
         supportsReferenceVideo: true,
         supportsReferenceAudio: true,
+        maxReferenceImages: 9,
+        maxReferenceVideos: 3,
+        maxReferenceAudios: 3,
+        maxMediaFiles: 12,
+        durationMin: 4,
+        durationMax: 15,
+        resolutions: ['480P', '720P'],
+        mediaTypes: ['text', 'image', 'video', 'audio'],
       },
     },
   },
@@ -108,9 +119,15 @@ const DEFAULT_CAPABILITY_RULES = [
         supportsReferenceImage: true,
         supportsReferenceVideo: true,
         supportsReferenceAudio: true,
+        maxReferenceImages: 9,
+        maxReferenceVideos: 3,
+        maxReferenceAudios: 3,
+        maxMediaFiles: 12,
         supportsVideoEditing: true,
         supportsVideoExtension: true,
+        modes: ['text-to-video', 'image-to-video', 'images-to-video', 'video-editing', 'video-extension'],
         taskTypes: ['multimodal_video_generation', 'video_editing', 'video_extension'],
+        mediaTypes: ['text', 'image', 'video', 'audio'],
       },
     },
   },
@@ -232,6 +249,48 @@ const DEFAULT_CAPABILITY_RULES = [
     },
   },
   {
+    label: '万相 2.7 文生视频',
+    description: '适用于 wan2.7-t2v 系列，补充官方文档里的自定义音频、提示词和结果链接限制。',
+    providerId: 'aliyun-bailian',
+    modelPattern: 'wan2.7-t2v*',
+    capabilities: {
+      chat: false,
+      imageGeneration: false,
+      imageReference: false,
+      multiImageReference: false,
+      videoGeneration: true,
+      video: {
+        endpointType: 'dashscope_video_synthesis',
+        modes: ['text-to-video'],
+        durationMin: 2,
+        durationMax: 15,
+        fps: 30,
+        ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+        resolutions: ['720P', '1080P'],
+        supportsAudioGeneration: false,
+        autoAudioByDefault: true,
+        supportsReferenceImage: false,
+        supportsReferenceVideo: false,
+        supportsReferenceAudio: true,
+        maxReferenceAudios: 1,
+        supportsNegativePrompt: true,
+        supportsPromptExtend: true,
+        supportsSeed: true,
+        supportsWatermark: true,
+        promptMaxChars: 800,
+        negativePromptMaxChars: 500,
+        audioFormats: ['mp3', 'wav'],
+        audioDurationMin: 2,
+        audioDurationMax: 30,
+        audioMaxFileMb: 15,
+        resultUrlTtlHours: 24,
+        queryRps: 20,
+        outputFormats: ['mp4', 'H.264'],
+        mediaTypes: ['text', 'audio_url'],
+      },
+    },
+  },
+  {
     label: '万相图生视频',
     description: '适用于 wan*-i2v* 图生视频和首尾帧视频模型，限制最多参考图数量。',
     providerId: 'aliyun-bailian',
@@ -263,6 +322,56 @@ const DEFAULT_CAPABILITY_RULES = [
       },
     },
   },
+  {
+    label: '万相 2.7 图生视频',
+    description: '适用于 wan2.7-i2v 系列，补充首尾帧、驱动音频和首段视频续写限制。',
+    providerId: 'aliyun-bailian',
+    modelPattern: 'wan2.7-*-i2v*',
+    capabilities: {
+      chat: false,
+      imageGeneration: false,
+      imageReference: true,
+      multiImageReference: true,
+      videoGeneration: true,
+      video: {
+        endpointType: 'dashscope_video_synthesis',
+        protocol: 'media',
+        modes: ['image-to-video', 'images-to-video', 'video-extension'],
+        durationMin: 2,
+        durationMax: 15,
+        fps: 30,
+        resolutions: ['720P', '1080P'],
+        supportsAudioGeneration: false,
+        autoAudioByDefault: true,
+        supportsReferenceImage: true,
+        supportsReferenceVideo: true,
+        supportsReferenceAudio: true,
+        maxReferenceImages: 2,
+        maxReferenceVideos: 1,
+        maxReferenceAudios: 1,
+        supportsNegativePrompt: true,
+        supportsPromptExtend: true,
+        supportsSeed: true,
+        supportsWatermark: true,
+        promptMaxChars: 800,
+        negativePromptMaxChars: 500,
+        imageFormats: ['jpg', 'jpeg', 'png', 'webp'],
+        imageMaxFileMb: 10,
+        imageMinSide: 300,
+        imageMaxSide: 5000,
+        audioFormats: ['mp3', 'wav'],
+        audioDurationMin: 2,
+        audioDurationMax: 30,
+        audioMaxFileMb: 15,
+        videoFormats: ['mp4'],
+        videoMaxFileMb: 100,
+        resultUrlTtlHours: 24,
+        queryRps: 20,
+        outputFormats: ['mp4', 'H.264'],
+        mediaTypes: ['first_frame', 'last_frame', 'driving_audio', 'first_clip'],
+      },
+    },
+  },
 ];
 
 function mergeCapabilities(base, patch) {
@@ -280,9 +389,13 @@ function mergeCapabilities(base, patch) {
   };
 }
 
-function seedDefaultCapabilities() {
+function seedDefaultCapabilities(repository = defaultModelCapabilityRepository) {
   for (const rule of DEFAULT_CAPABILITY_RULES) {
-    upsertModelCapability(rule.providerId, rule.modelPattern, mergeCapabilities(BASE_CAPABILITIES, rule.capabilities));
+    repository.upsertModelCapability(
+      rule.providerId,
+      rule.modelPattern,
+      mergeCapabilities(BASE_CAPABILITIES, rule.capabilities)
+    );
   }
 }
 
@@ -302,8 +415,8 @@ function wildcardToRegExp(pattern) {
   return new RegExp(`^${escaped.replace(/\*/g, '.*')}$`, 'i');
 }
 
-function getModelCapabilities(providerId = 'openai-compatible', model = '') {
-  const rules = listModelCapabilities().filter((rule) => rule.providerId === providerId);
+function getModelCapabilities(providerId = 'openai-compatible', model = '', repository = defaultModelCapabilityRepository) {
+  const rules = repository.listModelCapabilities().filter((rule) => rule.providerId === providerId);
   let resolved = { ...BASE_CAPABILITIES };
 
   for (const rule of rules) {
@@ -691,6 +804,16 @@ function filterVideoBodyByCapabilities(body, capabilities) {
       body: filtered,
       warnings,
       error: `This model supports at most ${video.maxReferenceAudios} reference audio files.`,
+    };
+  }
+
+  const referenceMediaCount = referenceImageCount + referenceVideoCount + referenceAudioCount;
+  if (video.maxMediaFiles && referenceMediaCount > video.maxMediaFiles) {
+    return {
+      ok: false,
+      body: filtered,
+      warnings,
+      error: `This model supports at most ${video.maxMediaFiles} reference media files.`,
     };
   }
 

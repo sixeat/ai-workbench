@@ -35,6 +35,20 @@ export function isNodeRunImageAsset(asset: NodeRunAssetSummary): boolean {
   return asset.type === 'image' || /\.(png|jpe?g|webp|gif|avif)$/i.test(asset.url || asset.fileName || '');
 }
 
+export function uniqueNodeRunAssetIds(assets: readonly NodeRunAssetSummary[]): string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+
+  for (const asset of assets) {
+    const id = String(asset.id || '').trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+
+  return ids;
+}
+
 export function summarizeNodeRunForDisplay(lastRun?: NodeRunSummary): {
   statusLabel: string;
   taskLabel: string;

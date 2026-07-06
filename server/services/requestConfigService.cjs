@@ -52,6 +52,7 @@ function resolveEmailCodeConfig(env = {}, mode = 'server') {
     windowMs: parsePositiveInt(env.WORKBENCH_EMAIL_CODE_WINDOW_MS, 60 * 60 * 1000),
     emailLimit: parsePositiveInt(env.WORKBENCH_EMAIL_CODE_EMAIL_LIMIT, mode === 'server' ? 3 : 50),
     ipLimit: parsePositiveInt(env.WORKBENCH_EMAIL_CODE_IP_LIMIT, mode === 'server' ? 20 : 200),
+    maxVerifyAttempts: parsePositiveInt(env.WORKBENCH_EMAIL_CODE_MAX_VERIFY_ATTEMPTS, 5),
   };
 }
 
@@ -59,6 +60,7 @@ function resolveTaskQueueConfig(env = {}) {
   return {
     textConcurrency: parsePositiveInt(env.WORKBENCH_TEXT_QUEUE_CONCURRENCY, 2),
     generationConcurrency: parsePositiveInt(env.WORKBENCH_GENERATION_QUEUE_CONCURRENCY, 2),
+    pollIntervalMs: parsePositiveInt(env.WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS, 1000),
   };
 }
 

@@ -4,11 +4,13 @@ import {
   canCancelTask,
   canRetryTask,
   chunkTaskAssetIds,
+  collectArchivableTaskAssetIds,
   collectTaskAssets,
   extractTaskOutputText,
   extractTaskReusablePrompt,
   filterTaskHistoryItems,
   formatTaskHistoryPageSummary,
+  formatTaskAssetArchiveSummary,
   formatTaskLogEvent,
   mergeTaskHistoryPages,
   serializeTaskInputForCopy,
@@ -63,6 +65,33 @@ test('task asset batch helpers dedupe ids and split large requests', () => {
   );
   assert.deepEqual(chunkTaskAssetIds(['a', 'b', 'c', 'd', 'e'], 2), [['a', 'b'], ['c', 'd'], ['e']]);
   assert.deepEqual(chunkTaskAssetIds(['a', 'b'], 0), [['a'], ['b']]);
+});
+
+test('task archive helpers summarize unique assets across filtered tasks', () => {
+  const items = [
+    {
+      task: task('task-a', {}),
+      assets: [
+        asset('asset-a', {}),
+        asset('asset-b', {}),
+      ],
+    },
+    {
+      task: task('task-b', {}),
+      assets: [
+        asset('asset-b', {}),
+        asset('asset-c', {}),
+      ],
+    },
+    {
+      task: task('task-c', {}),
+      assets: [],
+    },
+  ];
+
+  assert.deepEqual(collectArchivableTaskAssetIds(items), ['asset-a', 'asset-b', 'asset-c']);
+  assert.equal(formatTaskAssetArchiveSummary(items), '归档已加载的 2 个任务，共 3 个产物');
+  assert.equal(formatTaskAssetArchiveSummary([{ task: task('empty', {}), assets: [] }]), '已加载结果里没有可入库产物');
 });
 
 test('collectTaskAssets extracts linked, video, and shot list assets for library reuse', () => {

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
   Cloud,
   Eye,
   EyeOff,
@@ -18,6 +19,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 import { fetchModelsList, useApiStore } from '../../stores/apiStore';
 import {
   getCategoryLabel,
@@ -47,6 +49,7 @@ import { summarizeApiKeyTestChecks, summarizeApiKeyTestLimits } from '../../lib/
 import { apiKeyScopeLabel, canManageApiKeyScope, summarizeApiKeyQuota, type ApiKeyQuotaSummary } from '../../lib/apiKeyScopeDisplay';
 import { groupModelCapabilityPresetsByProvider, summarizeModelCapabilityPresetPreview } from '../../lib/modelCapabilityPresetDisplay';
 import { clearModelCapabilityCache } from '../../lib/modelCapabilityCache';
+import { parseOptionalNumberInput, parseOptionalRatioInput } from '../../lib/modelCapabilityForm';
 
 interface ApiManagerPanelProps {
   isOpen: boolean;
@@ -129,6 +132,10 @@ function toErrorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
+function apiKeyScopeUiLabel(scope?: string): string {
+  return scope === 'user' ? '自定义 Key' : apiKeyScopeLabel(scope);
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -145,9 +152,7 @@ function inputToList(value: string): string[] {
 }
 
 function numberOrUndefined(value: string): number | undefined {
-  if (value.trim() === '') return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return parseOptionalNumberInput(value);
 }
 
 function mergeById<T extends { id: string }>(current: T[], next: T[]): T[] {
@@ -469,9 +474,9 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
     setKeyTestResult(null);
   };
 
-  const startAddServerKey = () => {
+  const startAddServerKey = (keyScope?: 'user' | 'server') => {
     switchTab('server');
-    setServerForm({ ...emptyServerForm, keyScope: canManageServerKeys ? 'server' : 'user' });
+    setServerForm({ ...emptyServerForm, keyScope: keyScope || (canManageServerKeys ? 'server' : 'user') });
     setKeyTestResult(null);
   };
 
@@ -485,7 +490,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
       return;
     }
     if (!canManageApiKeyScope(serverForm.keyScope, canManageServerKeys)) {
-      setError('只有管理员可以创建或修改服务器共享 Key。普通用户请保存个人 Key。');
+      setError('只有管理员可以创建或修改服务器共享 Key。普通用户请保存自定义 Key。');
       return;
     }
 
@@ -636,8 +641,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
   if (!isOpen) return null;
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="flex h-[82vh] w-[980px] flex-col overflow-hidden rounded-xl border border-panel-border bg-panel-bg shadow-2xl">
+    <FloatingWindow contentClassName="h-[82vh] w-[980px] flex-col">
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <Key className="h-4 w-4 shrink-0 text-accent" />
@@ -698,6 +702,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
                   selectedId={serverForm.id}
                   total={serverKeyCount}
                   quota={apiKeyQuota}
+                  canManageServerKeys={canManageServerKeys}
                   loadingMore={loadingMoreServerKeys}
                   hasMore={hasMoreServerKeys}
                   onAdd={startAddServerKey}
@@ -782,8 +787,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }
 
@@ -857,46 +861,71 @@ function ServerKeyList(props: {
   selectedId: string;
   total: number;
   quota: ApiKeyQuotaSummary | null;
+  canManageServerKeys: boolean;
   loadingMore: boolean;
   hasMore: boolean;
-  onAdd: () => void;
+  onAdd: (keyScope?: 'user' | 'server') => void;
   onLoadMore: () => void;
   onSelect: (key: ProxyApiKey) => void;
 }) {
+  const serverKeys = props.keys.filter((key) => key.keyScope === 'server');
+  const customKeys = props.keys.filter((key) => key.keyScope !== 'server');
+
   return (
-    <section>
-      <ListHeader title={`后端 Key ${props.keys.length}/${props.total}`} onAdd={props.onAdd} />
-      <div className="mb-2 rounded-lg border border-panel-border bg-panel-bg px-2.5 py-2 text-[10px] leading-4 text-gray-500">
-        {summarizeApiKeyQuota(props.quota)}
+    <section className="space-y-3">
+      <div>
+        <h3 className="text-[11px] font-semibold text-gray-400">后端 Key {props.keys.length}/{props.total}</h3>
+        <p className="mt-1 text-[10px] leading-4 text-gray-600">服务器共享和自定义 Key 分开管理。</p>
       </div>
       {props.keys.length === 0 ? (
-        <EmptyList text="暂无后端 Key。点击 + 添加个人 Key 或服务器共享 Key。" />
+        <div className="grid gap-3">
+          <ServerKeySection
+            title="服务器"
+            description="平台统一托管的共享 Key。"
+            emptyText="暂无服务器 Key。"
+            keys={serverKeys}
+            selectedId={props.selectedId}
+            onAdd={props.canManageServerKeys ? () => props.onAdd('server') : undefined}
+            onSelect={props.onSelect}
+          />
+          <ServerKeySection
+            title="自定义"
+            description="你自己添加的第三方 API Key。"
+            emptyText="暂无自定义 Key。"
+            keys={customKeys}
+            selectedId={props.selectedId}
+            onAdd={() => props.onAdd('user')}
+            onSelect={props.onSelect}
+          >
+            <div className="mb-2 rounded-lg border border-panel-border bg-panel-bg px-2.5 py-2 text-[10px] leading-4 text-gray-500">
+              {summarizeApiKeyQuota(props.quota)}
+            </div>
+          </ServerKeySection>
+        </div>
       ) : (
-        <div className="space-y-1.5">
-          {props.keys.map((key) => (
-            <button
-              key={key.id}
-              onClick={() => props.onSelect(key)}
-              className={cn(
-                'w-full rounded-lg border p-2.5 text-left transition-colors',
-                props.selectedId === key.id ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg hover:border-gray-600'
-              )}
-            >
-              <div className="flex items-center gap-2">
-                <span className="truncate text-xs font-medium text-white">{key.name || key.providerId}</span>
-                <span className={cn(
-                  'ml-auto rounded px-1.5 py-0.5 text-[9px]',
-                  key.keyScope === 'server' ? 'bg-blue-500/10 text-blue-300' : 'bg-emerald-500/10 text-emerald-300'
-                )}
-                >
-                  {apiKeyScopeLabel(key.keyScope)}
-                </span>
-              </div>
-              <div className="mt-1 text-[10px] text-gray-500">
-                {key.providerId} · {key.isEnabled ? '启用' : '停用'}
-              </div>
-            </button>
-          ))}
+        <div className="space-y-3">
+          <ServerKeySection
+            title="服务器"
+            description="平台统一托管的共享 Key。"
+            emptyText={props.canManageServerKeys ? '暂无服务器 Key。点击 + 添加服务器共享 Key。' : '暂无服务器 Key。'}
+            keys={serverKeys}
+            selectedId={props.selectedId}
+            onAdd={props.canManageServerKeys ? () => props.onAdd('server') : undefined}
+            onSelect={props.onSelect}
+          />
+          <ServerKeySection
+            title="自定义"
+            description="你自己添加的第三方 API Key。"
+            emptyText="暂无自定义 Key。点击 + 添加自定义 Key。"
+            keys={customKeys}
+            selectedId={props.selectedId}
+            onAdd={() => props.onAdd('user')}
+            onSelect={props.onSelect}
+          >
+            <div className="mb-2 rounded-lg border border-panel-border bg-panel-bg px-2.5 py-2 text-[10px] leading-4 text-gray-500">
+              {summarizeApiKeyQuota(props.quota)}
+            </div>
+          </ServerKeySection>
           {props.hasMore && (
             <LoadMoreButton loading={props.loadingMore} onClick={props.onLoadMore}>
               加载更多 Key
@@ -905,6 +934,89 @@ function ServerKeyList(props: {
         </div>
       )}
     </section>
+  );
+}
+
+function ServerKeySection({
+  children,
+  description,
+  emptyText,
+  keys,
+  onAdd,
+  onSelect,
+  selectedId,
+  title,
+}: {
+  children?: React.ReactNode;
+  description: string;
+  emptyText: string;
+  keys: ProxyApiKey[];
+  onAdd?: () => void;
+  onSelect: (key: ProxyApiKey) => void;
+  selectedId: string;
+  title: string;
+}) {
+  return (
+    <div className="rounded-xl border border-panel-border bg-canvas-bg/40 p-2.5">
+      <div className="mb-2 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5">
+            <h4 className="text-[11px] font-semibold text-gray-300">{title}</h4>
+            <span className="rounded bg-panel-bg px-1.5 py-0.5 text-[9px] text-gray-500">{keys.length}</span>
+          </div>
+          <p className="mt-0.5 text-[10px] leading-4 text-gray-600">{description}</p>
+        </div>
+        {onAdd && (
+          <button onClick={onAdd} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title={`新增${title} Key`}>
+            <Plus className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {children}
+      {keys.length === 0 ? (
+        <EmptyList text={emptyText} />
+      ) : (
+        <div className="space-y-1.5">
+          {keys.map((key) => (
+            <ServerKeyItem key={key.id} item={key} selected={selectedId === key.id} onSelect={onSelect} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServerKeyItem({
+  item,
+  onSelect,
+  selected,
+}: {
+  item: ProxyApiKey;
+  onSelect: (key: ProxyApiKey) => void;
+  selected: boolean;
+}) {
+  return (
+    <button
+      onClick={() => onSelect(item)}
+      className={cn(
+        'w-full rounded-lg border p-2.5 text-left transition-colors',
+        selected ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg hover:border-gray-600'
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span className="truncate text-xs font-medium text-white">{item.name || item.providerId}</span>
+        <span className={cn(
+          'ml-auto rounded px-1.5 py-0.5 text-[9px]',
+          item.keyScope === 'server' ? 'bg-blue-500/10 text-blue-300' : 'bg-emerald-500/10 text-emerald-300'
+        )}
+        >
+          {apiKeyScopeUiLabel(item.keyScope)}
+        </span>
+      </div>
+      <div className="mt-1 text-[10px] text-gray-500">
+        {item.providerId} · {item.isEnabled ? '启用' : '停用'}
+      </div>
+    </button>
   );
 }
 
@@ -1074,12 +1186,23 @@ function ServerKeyEditor(props: {
   onTest: (options?: KeyTestOptions) => void;
   onDelete: () => void;
 }) {
+  const canManageCurrentKey = canManageApiKeyScope(props.form.keyScope, props.canManageServerKeys);
+  const isReadOnlyServerKey = props.form.keyScope === 'server' && !props.canManageServerKeys;
+
+  if (isReadOnlyServerKey) {
+    return (
+      <ReadOnlyServerKeyDetails
+        form={props.form}
+      />
+    );
+  }
+
   return (
     <div className="space-y-4">
       <PanelTitle
         icon={Cloud}
-        title={props.form.id ? `编辑${apiKeyScopeLabel(props.form.keyScope)}` : '新增后端 Key'}
-        description="Key 会加密保存到后端。个人 Key 只属于当前账号，服务器共享 Key 由管理员统一托管。"
+        title={props.form.id ? `编辑${apiKeyScopeUiLabel(props.form.keyScope)}` : '新增后端 Key'}
+        description="Key 会加密保存到后端。自定义 Key 只属于当前账号，服务器共享 Key 由管理员统一托管。"
       />
       <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3 text-[11px] leading-5 text-gray-500">
         {summarizeApiKeyQuota(props.quota)}
@@ -1101,7 +1224,7 @@ function ServerKeyEditor(props: {
           onClick={() => props.onChange({ keyScope: 'user' })}
           className={cn('rounded-lg border p-3 text-left', props.form.keyScope === 'user' ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg')}
         >
-          <div className="text-xs font-medium text-white">个人 Key</div>
+          <div className="text-xs font-medium text-white">自定义 Key</div>
           <div className="mt-1 text-[10px] text-gray-500">登录用户自带，只自己可管理和使用。</div>
         </button>
       </div>
@@ -1118,15 +1241,20 @@ function ServerKeyEditor(props: {
           不同模型限制不同。这里填具体模型名后，测试结果会按这个模型读取能力表。
         </p>
       </div>
-      <SwitchRow label={`启用这个${apiKeyScopeLabel(props.form.keyScope)}`} checked={props.form.isEnabled} onChange={(value) => props.onChange({ isEnabled: value })} />
+      <SwitchRow
+        label={`启用${apiKeyScopeUiLabel(props.form.keyScope)}`}
+        description={props.form.keyScope === 'user' ? '关闭后，节点不会再使用这个自定义 Key。' : '关闭后，普通用户不会再使用这个服务器 Key。'}
+        checked={props.form.isEnabled}
+        onChange={(value) => props.onChange({ isEnabled: value })}
+      />
       <div className="flex flex-wrap gap-2">
         <button
           onClick={props.onSave}
-          disabled={props.loading || !canManageApiKeyScope(props.form.keyScope, props.canManageServerKeys)}
+          disabled={props.loading || !canManageCurrentKey}
           className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50"
         >
           {props.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          保存{apiKeyScopeLabel(props.form.keyScope)}
+          保存{apiKeyScopeUiLabel(props.form.keyScope)}
         </button>
         {props.form.id && (
           <button onClick={() => props.onTest()} disabled={props.testing} className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:opacity-50">
@@ -1158,13 +1286,58 @@ function ServerKeyEditor(props: {
             全部能力
           </button>
         )}
-        {props.form.id && canManageApiKeyScope(props.form.keyScope, props.canManageServerKeys) && (
+        {props.form.id && canManageCurrentKey && (
           <button onClick={props.onDelete} className="rounded-md px-3 py-2 text-red-400 hover:bg-red-500/10" title="删除">
             <Trash2 className="h-3.5 w-3.5" />
           </button>
         )}
       </div>
       {props.testResult && <ApiKeyTestSummary result={props.testResult} />}
+    </div>
+  );
+}
+
+function ReadOnlyServerKeyDetails({
+  form,
+}: {
+  form: typeof emptyServerForm;
+}) {
+  const provider = getProviderTemplate(form.providerId);
+
+  return (
+    <div className="space-y-4">
+      <PanelTitle
+        icon={Cloud}
+        title="服务器共享 Key"
+        description="这个 Key 由管理员统一配置。当前账号只能查看和使用，不能编辑密钥。"
+      />
+
+      <div className="rounded-xl border border-blue-500/20 bg-blue-500/10 p-3 text-xs leading-5 text-blue-100">
+        服务器 Key 属于平台配置。请在管理员后台维护真实 Key，普通用户工作流运行时会自动使用可用的服务器 Key。
+      </div>
+
+      <div className="grid gap-3 rounded-xl border border-panel-border bg-canvas-bg/50 p-3">
+        <ReadOnlyField label="名称" value={form.name || '未命名服务器 Key'} />
+        <ReadOnlyField label="Provider" value={provider ? `${provider.name} - ${provider.description}` : form.providerId} />
+        <ReadOnlyField label="Base URL" value={form.baseUrl || provider?.defaultBaseUrl || '-'} />
+        <ReadOnlyField label="状态" value={form.isEnabled ? '启用' : '停用'} />
+        <ReadOnlyField label="API Key" value="由管理员加密托管，普通用户不可查看或修改" />
+      </div>
+
+      <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3 text-[11px] leading-5 text-gray-500">
+        连接测试、密钥更新和启停操作需要管理员权限。你可以在工作流节点里直接选择平台模型使用。
+      </div>
+    </div>
+  );
+}
+
+function ReadOnlyField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] text-gray-500">{label}</div>
+      <div className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-2 text-xs text-gray-200">
+        {value}
+      </div>
     </div>
   );
 }
@@ -1306,31 +1479,11 @@ function CapabilityEditor(props: {
           </div>
           <span className="rounded bg-panel-bg px-2 py-0.5 text-[10px] text-gray-500">{props.presets.length} 个模板</span>
         </div>
-        <select
+        <PresetSelect
+          groupedPresets={groupedPresets}
           value={selectedPresetId}
-          onChange={(event) => setSelectedPresetId(event.target.value)}
-          className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-        >
-          <option value="">选择一个模板查看...</option>
-          {groupedPresets.matching.length > 0 && (
-            <optgroup label="当前 Provider 模板">
-              {groupedPresets.matching.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label} - {preset.modelPattern}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {groupedPresets.others.length > 0 && (
-            <optgroup label="其他 Provider 模板">
-              {groupedPresets.others.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.label} - {preset.providerId} / {preset.modelPattern}
-                </option>
-              ))}
-            </optgroup>
-          )}
-        </select>
+          onChange={setSelectedPresetId}
+        />
         {selectedPreset && (
           <div className="mt-3 rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-2">
             <div className="flex items-start justify-between gap-3">
@@ -1368,9 +1521,10 @@ function CapabilityEditor(props: {
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="mb-1 block text-[10px] text-gray-500">Provider</label>
-          <select value={props.form.providerId} onChange={(event) => props.onChange({ providerId: event.target.value })} className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none">
-            {PROVIDER_TEMPLATES.map((provider) => <option key={provider.id} value={provider.id}>{provider.name}</option>)}
-          </select>
+          <ProviderSelect
+            value={props.form.providerId}
+            onChange={(providerId) => props.onChange({ providerId })}
+          />
         </div>
         <div>
           <label className="mb-1 block text-[10px] text-gray-500">模型匹配</label>
@@ -1431,17 +1585,15 @@ function CapabilityEditor(props: {
             />
             <SmallInput
               label="最小宽高比"
-              type="number"
               value={String(imageCapabilities.minAspectRatio ?? '')}
-              onChange={(value) => updateNestedCapability('image', { minAspectRatio: numberOrUndefined(value) })}
-              placeholder="1:8 填 0.125"
+              onChange={(value) => updateNestedCapability('image', { minAspectRatio: parseOptionalRatioInput(value) })}
+              placeholder="1:8 或 0.125"
             />
             <SmallInput
               label="最大宽高比"
-              type="number"
               value={String(imageCapabilities.maxAspectRatio ?? '')}
-              onChange={(value) => updateNestedCapability('image', { maxAspectRatio: numberOrUndefined(value) })}
-              placeholder="8:1 填 8"
+              onChange={(value) => updateNestedCapability('image', { maxAspectRatio: parseOptionalRatioInput(value) })}
+              placeholder="8:1 或 8"
             />
           </div>
           <div className="grid grid-cols-2 gap-2">
@@ -1599,11 +1751,11 @@ function ApiBasicFields(props: {
       </div>
       <div>
         <label className="mb-1 block text-[10px] text-gray-500">Provider</label>
-        <select value={props.form.providerId} onChange={(event) => props.onChange({ providerId: event.target.value })} className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none">
-          {PROVIDER_TEMPLATES.map((provider) => (
-            <option key={provider.id} value={provider.id}>{provider.name} - {provider.description}</option>
-          ))}
-        </select>
+        <ProviderSelect
+          showDescription
+          value={props.form.providerId}
+          onChange={(providerId) => props.onChange({ providerId })}
+        />
       </div>
       <div>
         <label className="mb-1 block text-[10px] text-gray-500">Base URL</label>
@@ -1626,6 +1778,149 @@ function ApiBasicFields(props: {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function ProviderSelect({
+  onChange,
+  showDescription = false,
+  value,
+}: {
+  onChange: (value: string) => void;
+  showDescription?: boolean;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selectedProvider = getProviderTemplate(value) || PROVIDER_TEMPLATES.find((provider) => provider.id === value);
+  const selectedLabel = selectedProvider
+    ? showDescription
+      ? `${selectedProvider.name} - ${selectedProvider.description}`
+      : selectedProvider.name
+    : value || '选择 Provider';
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className={cn(
+          'flex min-h-[34px] w-full items-center gap-2 rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-left text-xs text-white transition-colors',
+          open ? 'border-accent' : 'hover:border-gray-600'
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">{selectedLabel}</span>
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-64 overflow-auto rounded-lg border border-panel-border bg-[#0c0f12] p-1.5 shadow-2xl">
+          {PROVIDER_TEMPLATES.map((provider) => {
+            return (
+              <button
+                key={provider.id}
+                type="button"
+                onClick={() => {
+                  onChange(provider.id);
+                  setOpen(false);
+                }}
+                className={cn(
+                  'flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors hover:bg-[#151a20]',
+                  provider.id === value && 'bg-accent/10 text-accent'
+                )}
+              >
+                <span className="text-xs font-medium">{provider.name}</span>
+                {showDescription && <span className="mt-0.5 line-clamp-2 text-[10px] text-gray-500">{provider.description}</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PresetSelect({
+  groupedPresets,
+  onChange,
+  value,
+}: {
+  groupedPresets: ReturnType<typeof groupModelCapabilityPresetsByProvider>;
+  onChange: (value: string) => void;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const allPresets = [...groupedPresets.matching, ...groupedPresets.others];
+  const selectedPreset = allPresets.find((preset) => preset.id === value);
+  const selectedLabel = selectedPreset
+    ? `${selectedPreset.label} - ${selectedPreset.modelPattern}`
+    : '选择一个模板查看...';
+
+  const renderPreset = (preset: ProxyModelCapabilityPreset, showProvider: boolean) => (
+    <button
+      key={preset.id}
+      type="button"
+      onClick={() => {
+        onChange(preset.id);
+        setOpen(false);
+      }}
+      className={cn(
+        'flex w-full flex-col rounded-md px-2.5 py-2 text-left transition-colors hover:bg-[#151a20]',
+        preset.id === value && 'bg-accent/10 text-accent'
+      )}
+    >
+      <span className="text-xs font-medium">{preset.label}</span>
+      <span className="mt-0.5 text-[10px] text-gray-500">
+        {showProvider ? `${preset.providerId} / ${preset.modelPattern}` : preset.modelPattern}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        className={cn(
+          'flex min-h-[34px] w-full items-center gap-2 rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-left text-xs text-white transition-colors',
+          open ? 'border-accent' : 'hover:border-gray-600'
+        )}
+      >
+        <span className="min-w-0 flex-1 truncate">{selectedLabel}</span>
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-50 max-h-72 overflow-auto rounded-lg border border-panel-border bg-[#0c0f12] p-1.5 shadow-2xl">
+          <button
+            type="button"
+            onClick={() => {
+              onChange('');
+              setOpen(false);
+            }}
+            className={cn(
+              'flex w-full rounded-md px-2.5 py-2 text-left text-xs transition-colors hover:bg-[#151a20]',
+              !value && 'bg-accent/10 text-accent'
+            )}
+          >
+            选择一个模板查看...
+          </button>
+
+          {groupedPresets.matching.length > 0 && (
+            <div className="mt-1">
+              <div className="px-2.5 py-1 text-[10px] font-medium text-gray-500">当前 Provider 模板</div>
+              <div className="space-y-1">{groupedPresets.matching.map((preset) => renderPreset(preset, false))}</div>
+            </div>
+          )}
+
+          {groupedPresets.others.length > 0 && (
+            <div className="mt-1 border-t border-panel-border pt-1">
+              <div className="px-2.5 py-1 text-[10px] font-medium text-gray-500">其他 Provider 模板</div>
+              <div className="space-y-1">{groupedPresets.others.map((preset) => renderPreset(preset, true))}</div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1676,12 +1971,35 @@ function ModelListEditor(props: {
   );
 }
 
-function SwitchRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+function SwitchRow({
+  checked,
+  description,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  description?: string;
+  label: string;
+  onChange: (value: boolean) => void;
+}) {
   return (
-    <button onClick={() => onChange(!checked)} className="flex items-center justify-between rounded-lg border border-panel-border bg-panel-bg px-3 py-2 text-left">
-      <span className="text-xs text-gray-300">{label}</span>
-      <span className={cn('relative h-5 w-10 rounded-full transition-colors', checked ? 'bg-accent' : 'bg-gray-700')}>
-        <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform', checked ? 'translate-x-5' : 'translate-x-0.5')} />
+    <button
+      type="button"
+      aria-pressed={checked}
+      onClick={() => onChange(!checked)}
+      className="flex w-full items-center justify-between gap-4 rounded-xl border border-panel-border bg-panel-bg px-3 py-2.5 text-left transition-colors hover:border-gray-600"
+    >
+      <span className="min-w-0">
+        <span className="block text-xs font-medium text-gray-200">{label}</span>
+        {description && <span className="mt-0.5 block text-[10px] leading-4 text-gray-500">{description}</span>}
+      </span>
+      <span
+        className={cn(
+          'relative h-[22px] w-[42px] shrink-0 rounded-full border transition-colors',
+          checked ? 'border-accent bg-accent' : 'border-[#303b49] bg-[#1a222c]'
+        )}
+      >
+        <span className={cn('absolute top-0.5 h-[18px] w-[18px] rounded-full bg-white shadow-sm transition-transform', checked ? 'translate-x-[20px]' : 'translate-x-0.5')} />
       </span>
     </button>
   );

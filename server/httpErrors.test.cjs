@@ -253,6 +253,39 @@ test('safeUpstreamTaskError normalizes nested provider errors under output and d
   assert.equal(innerDataError.upstreamRequestId, 'provider-inner-request');
 });
 
+test('safeUpstreamTaskError classifies string provider errors and uppercase fields', () => {
+  const stringError = safeUpstreamTaskError({
+    status: 400,
+    statusText: 'Bad Request',
+    data: {
+      error: 'InvalidApiKey: credential is invalid.',
+      RequestId: 'uppercase-request-1',
+      apiKey: 'should-not-be-stored',
+    },
+  }, 'Text generation upstream request failed.');
+
+  assert.equal(stringError.upstreamCategory, 'auth');
+  assert.equal(stringError.upstreamRetryable, false);
+  assert.equal(stringError.upstreamMessage, 'InvalidApiKey: credential is invalid.');
+  assert.equal(stringError.upstreamRequestId, 'uppercase-request-1');
+  assert.equal(JSON.stringify(stringError).includes('should-not-be-stored'), false);
+
+  const uppercaseError = safeUpstreamTaskError({
+    status: 400,
+    data: {
+      ErrorCode: 'InsufficientBalance',
+      ErrorMessage: 'Balance not enough.',
+      RequestId: 'uppercase-request-2',
+    },
+  }, 'Image generation upstream request failed.');
+
+  assert.equal(uppercaseError.upstreamCategory, 'quota');
+  assert.equal(uppercaseError.upstreamRetryable, false);
+  assert.equal(uppercaseError.upstreamCode, 'InsufficientBalance');
+  assert.equal(uppercaseError.upstreamMessage, 'Balance not enough.');
+  assert.equal(uppercaseError.upstreamRequestId, 'uppercase-request-2');
+});
+
 test('safeUpstreamTaskError normalizes provider content policy errors', () => {
   const error = safeUpstreamTaskError({
     status: 400,

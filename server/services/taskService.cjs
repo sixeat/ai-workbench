@@ -1,21 +1,35 @@
-const {
-  addTaskLog,
-  countTasks,
-  getTaskForUser,
-  listTasks,
-  listTaskAssets,
-  listTaskLogs,
-  updateTask,
-} = require('../db.cjs');
+const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
+const { collectTaskRelationshipIds } = require('./taskRelationshipService.cjs');
 
-function createTaskService({ publicAsset }) {
+function elapsedTaskMs(task) {
+  const startedAt = new Date(task?.updatedAt || task?.createdAt || '').getTime();
+  return Number.isFinite(startedAt) ? Math.max(0, Date.now() - startedAt) : 0;
+}
+
+function taskRelationshipData(task) {
+  const upstreamTaskIds = collectTaskRelationshipIds(task?.input || {}, task?.output || {});
+  return upstreamTaskIds.length > 0 ? { upstreamTaskIds } : {};
+}
+
+function cancellationLogData(task) {
+  return {
+    status: task.status,
+    nodeType: task.nodeType,
+    providerId: task.providerId,
+    model: task.model,
+    durationMs: elapsedTaskMs(task),
+    ...taskRelationshipData(task),
+  };
+}
+
+function createTaskService({ publicAsset, taskRepository = defaultTaskRepository }) {
   function publicTask(task, options = {}) {
     if (!task) return null;
     const result = {
       ...task,
-      assets: listTaskAssets(task.id, task.userId).map(publicAsset),
+      assets: taskRepository.listTaskAssets(task.id, task.userId).map(publicAsset),
     };
-    if (options.includeLogs) result.logs = listTaskLogs(task.id);
+    if (options.includeLogs) result.logs = taskRepository.listTaskLogs(task.id);
     return result;
   }
 
@@ -41,9 +55,9 @@ function createTaskService({ publicAsset }) {
 
   function listUserTasks(userId, options = 100) {
     const query = normalizeListOptions(options);
-    const total = countTasks(userId);
+    const total = taskRepository.countTasks(userId);
     return {
-      tasks: listTasks(userId, query).map((task) => publicTask(task, { includeLogs: query.includeLogs })),
+      tasks: taskRepository.listTasks(userId, query).map((task) => publicTask(task, { includeLogs: query.includeLogs })),
       count: total,
       total,
       limit: query.limit,
@@ -52,22 +66,23 @@ function createTaskService({ publicAsset }) {
   }
 
   function getUserTask(taskId, userId) {
-    const task = getTaskForUser(taskId, userId);
+    const task = taskRepository.getTaskForUser(taskId, userId);
     return task ? publicTask(task, { includeLogs: true }) : null;
   }
 
   function cancelTask(taskId, userId) {
-    const task = getTaskForUser(taskId, userId);
+    const task = taskRepository.getTaskForUser(taskId, userId);
     if (!task) return null;
     if (task.status === 'queued' || task.status === 'running') {
-      addTaskLog(task.id, {
+      taskRepository.addTaskLog(task.id, {
         level: 'warn',
         event: 'cancel_requested',
         message: task.status === 'running'
           ? 'Running task was marked as cancelled. The active upstream request may finish in the background.'
           : 'Queued task was cancelled before execution.',
+        data: cancellationLogData(task),
       });
-      return publicTask(updateTask(task.id, {
+      return publicTask(taskRepository.updateTask(task.id, {
         status: 'cancelled',
         error: task.status === 'running'
           ? { message: 'Cancellation requested while task was running.' }

@@ -12,6 +12,7 @@ const {
   createUser,
   db,
   insertAsset,
+  listAuditLogs,
   listAssets,
 } = require('./db.cjs');
 const { registerAssetRoutes } = require('./routes/assetRoutes.cjs');
@@ -148,6 +149,7 @@ function seedAsset({
 }
 
 test.beforeEach(() => {
+  db.prepare('DELETE FROM audit_logs').run();
   db.prepare('DELETE FROM asset_collection_items').run();
   db.prepare('DELETE FROM asset_collections').run();
   db.prepare('DELETE FROM task_outputs').run();
@@ -176,6 +178,42 @@ test('upload stores the asset size in SQLite', async () => {
 
   assert.equal(res.statusCode, 201);
   assert.equal(listAssets('local-user', 10)[0].sizeBytes, 4);
+});
+
+test('upload route writes a safe audit log with request context', async () => {
+  const { route } = createUploadRoute({
+    maxFileBytes: 10,
+    maxUserAssetBytes: 100,
+    maxDailyUploadBytes: 100,
+  });
+  const res = createMockRes();
+
+  await runRoute(route, {
+    body: {
+      dataUrl: imageDataUrl(4),
+      fileName: 'audit-upload.png',
+      prompt: 'private upload prompt',
+    },
+    headers: { 'user-agent': 'Upload Audit Browser/1.0' },
+    socket: { remoteAddress: '203.0.113.80' },
+  }, res);
+
+  assert.equal(res.statusCode, 201);
+  const auditLogs = listAuditLogs({
+    action: 'asset.upload',
+    actorUserId: 'local-user',
+    limit: 10,
+    targetType: 'asset',
+  });
+
+  assert.equal(auditLogs.length, 1);
+  assert.equal(auditLogs[0].ipAddress, '203.0.113.80');
+  assert.equal(auditLogs[0].userAgent, 'Upload Audit Browser/1.0');
+  assert.equal(auditLogs[0].targetId, res.body.asset.id);
+  assert.equal(auditLogs[0].metadata.fileName, 'audit-upload.png');
+  assert.equal(auditLogs[0].metadata.sizeBytes, 4);
+  assert.equal(JSON.stringify(auditLogs).includes('data:image'), false);
+  assert.equal(JSON.stringify(auditLogs).includes('private upload prompt'), false);
 });
 
 test('upload rejects unsupported mime types before saving', async () => {
@@ -220,7 +258,7 @@ test('upload rejects files above the single-file limit before saving', async () 
 
 test('upload rejects files when the user storage quota would be exceeded', async () => {
   seedAsset({ id: 'existing-total', sizeBytes: 90, providerId: 'generated' });
-  const { route } = createUploadRoute({
+  const { assetStorage, route } = createUploadRoute({
     maxFileBytes: 100,
     maxUserAssetBytes: 100,
     maxDailyUploadBytes: 100,
@@ -236,6 +274,7 @@ test('upload rejects files when the user storage quota would be exceeded', async
 
   assert.equal(res.statusCode, 413);
   assert.match(res.body.error, /storage quota/i);
+  assert.equal(assetStorage.savedCount, 0);
 });
 
 test('upload quotas count only the current user assets', async () => {
@@ -277,7 +316,7 @@ test('upload quotas count only the current user assets', async () => {
 
 test('upload rejects files when the daily upload quota would be exceeded', async () => {
   seedAsset({ id: 'existing-daily', sizeBytes: 90, providerId: 'upload' });
-  const { route } = createUploadRoute({
+  const { assetStorage, route } = createUploadRoute({
     maxFileBytes: 100,
     maxUserAssetBytes: 1000,
     maxDailyUploadBytes: 100,
@@ -293,4 +332,25 @@ test('upload rejects files when the daily upload quota would be exceeded', async
 
   assert.equal(res.statusCode, 413);
   assert.match(res.body.error, /daily upload quota/i);
+  assert.equal(assetStorage.savedCount, 0);
+});
+
+test('daily upload quota ignores generated assets for the same user', async () => {
+  seedAsset({ id: 'generated-today', sizeBytes: 95, providerId: 'generated' });
+  const { route } = createUploadRoute({
+    maxFileBytes: 100,
+    maxUserAssetBytes: 1000,
+    maxDailyUploadBytes: 100,
+  });
+  const res = createMockRes();
+
+  await runRoute(route, {
+    body: {
+      dataUrl: imageDataUrl(10),
+      fileName: 'upload-after-generated.png',
+    },
+  }, res);
+
+  assert.equal(res.statusCode, 201);
+  assert.deepEqual(listAssets('local-user', 10).map((asset) => asset.id), ['uploaded-1', 'generated-today']);
 });

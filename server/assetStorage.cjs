@@ -2,8 +2,7 @@ const fs = require('fs').promises;
 const { createReadStream, existsSync } = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
-
-const OUTPUT_DIR = process.env.IMAGE_OUTPUT_DIR || path.join(__dirname, '..', 'outputs');
+const { OUTPUT_DIR } = require('./dataPaths.cjs');
 
 function slugify(value) {
   return String(value || 'asset')

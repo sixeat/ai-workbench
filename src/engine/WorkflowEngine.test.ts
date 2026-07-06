@@ -167,7 +167,7 @@ test('text model inherits upstream model context', async () => {
   assert.equal(nodes[1].data.outputs.modelSourceUsed, 'inherit');
   const modelContext = nodes[1].data.outputs.modelContext as TextModelContext;
   assert.equal(modelContext.model, 'gpt-upstream');
-  assert.equal(requests[0].url, 'http://127.0.0.1:3000/api/chat');
+  assert.equal(requests[0].url, '/api/chat');
   assert.equal(requests[0].body.model, 'gpt-upstream');
   assert.deepEqual(requests[0].body.upstreamTaskIds, ['upstream-task-1']);
 });

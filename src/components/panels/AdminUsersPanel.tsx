@@ -24,6 +24,7 @@ import {
   summarizeQueues,
 } from '../../lib/adminHealthDisplay';
 import { cn } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 import {
   buildAuditActorLabelMap,
   filterAuditLogs,
@@ -326,12 +327,14 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
   };
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="flex h-[84vh] w-[980px] flex-col overflow-hidden rounded-xl border border-panel-border bg-panel-bg shadow-2xl">
+    <FloatingWindow contentClassName="h-[calc(100vh-32px)] w-[calc(100vw-112px)] flex-col">
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-accent" />
-            <h2 className="text-sm font-semibold text-white">管理后台</h2>
+            <div>
+              <h2 className="text-sm font-semibold text-white">管理端</h2>
+              <div className="text-[10px] text-gray-500">平台 Key、用户、模型能力和审计统一在这里维护</div>
+            </div>
             {notice && <span className="text-[10px] text-emerald-300">{notice}</span>}
           </div>
           <div className="flex items-center gap-2">
@@ -613,7 +616,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
                   <AdminFeatureCard
                     icon={<Cloud className="h-4 w-4" />}
                     title="服务端 Key"
-                    description="服务器统一托管 API Key，前端不保存明文 Key，适合多人共用。"
+                    description="管理员统一托管平台 Key，普通用户只能使用，不能查看或修改。"
                   />
                   <AdminFeatureCard
                     icon={<Key className="h-4 w-4" />}
@@ -629,7 +632,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
                 <div className="rounded-lg border border-panel-border bg-canvas-bg/60 p-4">
                   <div className="mb-2 text-sm font-medium text-white">API Key 管理</div>
                   <p className="max-w-2xl text-xs leading-5 text-gray-400">
-                    这里是后台里的 API Key 分区。实际编辑、测试和删除操作复用统一的 API 管理面板，避免同一套 Key 逻辑分散在多个地方。
+                    这里是后台里的 API Key 分区。服务器共享 Key 只能由管理员新增、编辑和删除；普通用户在 API 面板里只看到只读信息。
                   </p>
                   <PrimaryInlineButton
                     disabled={!onOpenApiManager}
@@ -804,8 +807,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
             )}
           </main>
         </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }
 

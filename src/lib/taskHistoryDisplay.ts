@@ -167,6 +167,17 @@ export function chunkTaskAssetIds(ids: readonly string[], size = 100): string[][
   return chunks;
 }
 
+export function collectArchivableTaskAssetIds(items: readonly TaskHistoryListItem[]): string[] {
+  return uniqueTaskAssetIds(items.flatMap((item) => item.assets));
+}
+
+export function formatTaskAssetArchiveSummary(items: readonly TaskHistoryListItem[]): string {
+  const taskCount = items.filter((item) => item.assets.length > 0).length;
+  const assetCount = collectArchivableTaskAssetIds(items).length;
+  if (assetCount === 0) return '已加载结果里没有可入库产物';
+  return `归档已加载的 ${taskCount} 个任务，共 ${assetCount} 个产物`;
+}
+
 function isTaskAssetLike(value: unknown): value is ProxyAsset {
   if (!isRecord(value)) return false;
   return typeof value.type === 'string' && typeof value.url === 'string' && value.url.trim().length > 0;

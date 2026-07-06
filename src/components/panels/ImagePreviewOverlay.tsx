@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect } from 'react';
 import { useImagePreviewStore } from '../../stores/imagePreviewStore';
+import { FloatingWindow } from '../layout/FloatingWindow';
 
 export function ImagePreviewOverlay() {
   const { isOpen, url, title, closePreview } = useImagePreviewStore();
@@ -17,8 +18,11 @@ export function ImagePreviewOverlay() {
   if (!isOpen || !url) return null;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/80 p-6 backdrop-blur-sm" onClick={closePreview}>
-      <div className="relative flex max-h-full max-w-full flex-col gap-3" onClick={(event) => event.stopPropagation()}>
+    <FloatingWindow
+      className="floating-window-layer--preview"
+      contentClassName="!border-0 !bg-transparent !shadow-none flex-col gap-3"
+    >
+      <div className="relative flex max-h-full max-w-full flex-col gap-3">
         <div className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-panel-bg/95 px-3 py-2 shadow-xl">
           <div className="min-w-0 truncate text-xs text-gray-300">{title || '图片预览'}</div>
           <button
@@ -34,6 +38,6 @@ export function ImagePreviewOverlay() {
           <img src={url} alt={title || 'preview'} className="max-h-[82vh] max-w-[88vw] object-contain" />
         </div>
       </div>
-    </div>
+    </FloatingWindow>
   );
 }

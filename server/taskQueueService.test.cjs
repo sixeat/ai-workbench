@@ -477,6 +477,42 @@ test('task queue startup drains existing queued text image and video tasks witho
   assert.equal(listTaskLogs(video.id).some((log) => log.event === 'started'), true);
 });
 
+test('task queue polls for tasks created after startup by another process', async () => {
+  const user = createUser({
+    email: 'queue-poll-after-start@example.com',
+    username: 'queue-poll-after-start@example.com',
+    name: 'Queue Poll After Start',
+    passwordHash: 'test',
+  });
+  const handled = [];
+  const queue = createTaskQueueService({
+    pollIntervalMs: 20,
+    recoverRunning: false,
+    handlers: {
+      text: async (claimed) => {
+        handled.push(claimed.id);
+        updateTask(claimed.id, { status: 'succeeded', output: { text: 'polled ok' } });
+      },
+    },
+  });
+
+  queue.start();
+  const task = createTask({
+    userId: user.id,
+    nodeType: 'text',
+    providerId: 'openai-compatible',
+    model: 'gpt-test',
+    status: 'queued',
+    input: { prompt: 'created after worker start' },
+  });
+
+  await waitFor(() => getTask(task.id).status === 'succeeded');
+  await queue.stop();
+
+  assert.deepEqual(handled, [task.id]);
+  assert.equal(listTaskLogs(task.id).some((log) => log.event === 'started'), true);
+});
+
 test('task queue stats expose active workers, supported node types, and exact backlog', () => {
   const user = createUser({
     email: 'queue-stats@example.com',
@@ -521,6 +557,7 @@ test('task queue stats expose active workers, supported node types, and exact ba
   assert.equal(stats.name, 'stats-generation');
   assert.deepEqual(stats.nodeTypes, ['stats-image', 'stats-video']);
   assert.equal(stats.concurrency, 0);
+  assert.equal(stats.pollIntervalMs, 1000);
   assert.equal(stats.activeCount, 0);
   assert.equal(stats.queuedCount, 2);
   assert.equal(stats.scheduled, false);

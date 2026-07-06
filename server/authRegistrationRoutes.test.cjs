@@ -27,7 +27,7 @@ const {
   parseCookies,
   verifyPassword,
 } = require('./auth.cjs');
-const { registerAuthRoutes } = require('./routes/authRoutes.cjs');
+const { createEmailCodeRateLimit, hashVerificationCode, registerAuthRoutes } = require('./routes/authRoutes.cjs');
 
 function createFakeApp() {
   const routes = [];
@@ -96,6 +96,33 @@ function testVerificationHash(email, code) {
     .update(`test-pepper:${String(email || '').trim().toLowerCase()}:${String(code).trim()}`)
     .digest('hex');
 }
+
+test('verification code hashing falls back to WORKBENCH_KEY_SECRET', () => {
+  const previousPepper = process.env.WORKBENCH_VERIFICATION_CODE_PEPPER;
+  const previousKeySecret = process.env.WORKBENCH_KEY_SECRET;
+  const previousLegacySecret = process.env.WORKBENCH_KEY_ENCRYPTION_SECRET;
+
+  try {
+    delete process.env.WORKBENCH_VERIFICATION_CODE_PEPPER;
+    delete process.env.WORKBENCH_KEY_ENCRYPTION_SECRET;
+    process.env.WORKBENCH_KEY_SECRET = 'primary-key-secret';
+
+    const expected = createHash('sha256')
+      .update('primary-key-secret:person@example.com:123456')
+      .digest('hex');
+
+    assert.equal(hashVerificationCode(' Person@Example.com ', ' 123456 '), expected);
+  } finally {
+    if (previousPepper === undefined) delete process.env.WORKBENCH_VERIFICATION_CODE_PEPPER;
+    else process.env.WORKBENCH_VERIFICATION_CODE_PEPPER = previousPepper;
+
+    if (previousKeySecret === undefined) delete process.env.WORKBENCH_KEY_SECRET;
+    else process.env.WORKBENCH_KEY_SECRET = previousKeySecret;
+
+    if (previousLegacySecret === undefined) delete process.env.WORKBENCH_KEY_ENCRYPTION_SECRET;
+    else process.env.WORKBENCH_KEY_ENCRYPTION_SECRET = previousLegacySecret;
+  }
+});
 
 async function runRoute(routeItem, req, res) {
   let index = 0;
@@ -209,6 +236,126 @@ test('registration verify consumes the code when the email becomes registered fi
   assert.equal(getLatestEmailVerification('raceuser@example.com', 'register'), null);
 });
 
+test('registration request route enforces verification limits by email and IP', async () => {
+  const emailLimitedApp = registerRoutes({
+    emailCodeRateLimit: createEmailCodeRateLimit({
+      windowMs: 60_000,
+      maxPerEmail: 1,
+      maxPerIp: 100,
+    }),
+  });
+  const emailLimitedRoute = route(emailLimitedApp, 'POST', '/api/auth/register/request');
+
+  const firstEmailRes = createMockRes();
+  await runRoute(emailLimitedRoute, {
+    body: {
+      email: 'rate-email@example.com',
+      name: 'Rate Email',
+      password: 'register-password-123',
+    },
+    headers: { 'user-agent': 'Registration Browser' },
+    socket: { remoteAddress: '198.51.100.90' },
+  }, firstEmailRes);
+  assert.equal(firstEmailRes.statusCode, 200);
+
+  const secondEmailRes = createMockRes();
+  await runRoute(emailLimitedRoute, {
+    body: {
+      email: ' Rate-Email@Example.com ',
+      name: 'Rate Email Again',
+      password: 'register-password-123',
+    },
+    headers: { 'user-agent': 'Registration Browser' },
+    socket: { remoteAddress: '198.51.100.91' },
+  }, secondEmailRes);
+  assert.equal(secondEmailRes.statusCode, 429);
+  assert.match(secondEmailRes.body.error, /verification code/i);
+  assert.equal(Boolean(secondEmailRes.headers['retry-after']), true);
+
+  const ipLimitedApp = registerRoutes({
+    emailCodeRateLimit: createEmailCodeRateLimit({
+      windowMs: 60_000,
+      maxPerEmail: 100,
+      maxPerIp: 1,
+    }),
+  });
+  const ipLimitedRoute = route(ipLimitedApp, 'POST', '/api/auth/register/request');
+
+  const firstIpRes = createMockRes();
+  await runRoute(ipLimitedRoute, {
+    body: {
+      email: 'rate-ip-a@example.com',
+      name: 'Rate IP A',
+      password: 'register-password-123',
+    },
+    headers: { 'user-agent': 'Registration Browser' },
+    socket: { remoteAddress: '198.51.100.92' },
+  }, firstIpRes);
+  assert.equal(firstIpRes.statusCode, 200);
+
+  const secondIpRes = createMockRes();
+  await runRoute(ipLimitedRoute, {
+    body: {
+      email: 'rate-ip-b@example.com',
+      name: 'Rate IP B',
+      password: 'register-password-123',
+    },
+    headers: { 'user-agent': 'Registration Browser' },
+    socket: { remoteAddress: '198.51.100.92' },
+  }, secondIpRes);
+  assert.equal(secondIpRes.statusCode, 429);
+  assert.match(secondIpRes.body.error, /verification code/i);
+});
+
+test('registration verification locks a code after repeated wrong attempts', async () => {
+  const app = registerRoutes({ maxEmailCodeVerifyAttempts: 2 });
+  const requestRoute = route(app, 'POST', '/api/auth/register/request');
+  const verifyRoute = route(app, 'POST', '/api/auth/register/verify');
+
+  const requestRes = createMockRes();
+  await runRoute(requestRoute, {
+    body: {
+      email: 'lock-register@example.com',
+      name: 'Lock Register',
+      password: 'register-password-123',
+    },
+    headers: { 'user-agent': 'Registration Browser' },
+    socket: { remoteAddress: '198.51.100.93' },
+  }, requestRes);
+
+  assert.equal(requestRes.statusCode, 200);
+
+  for (const code of ['000001', '000002']) {
+    const wrongRes = createMockRes();
+    await runRoute(verifyRoute, {
+      body: {
+        email: 'lock-register@example.com',
+        code,
+      },
+      headers: { 'user-agent': 'Registration Browser' },
+      socket: { remoteAddress: '198.51.100.93' },
+    }, wrongRes);
+    assert.equal(wrongRes.statusCode, 400);
+    assert.match(wrongRes.body.error, /expired or invalid/i);
+  }
+
+  assert.equal(getLatestEmailVerification('lock-register@example.com', 'register'), null);
+
+  const correctAfterLockRes = createMockRes();
+  await runRoute(verifyRoute, {
+    body: {
+      email: 'lock-register@example.com',
+      code: requestRes.body.delivery.devCode,
+    },
+    headers: { 'user-agent': 'Registration Browser' },
+    socket: { remoteAddress: '198.51.100.93' },
+  }, correctAfterLockRes);
+
+  assert.equal(correctAfterLockRes.statusCode, 400);
+  assert.match(correctAfterLockRes.body.error, /expired or invalid/i);
+  assert.equal(getUserByEmail('lock-register@example.com'), null);
+});
+
 test('password reset hides unknown accounts and resets enabled accounts with an email code', async () => {
   const user = createUser({
     email: 'reset-user@example.com',
@@ -270,6 +417,62 @@ test('password reset hides unknown accounts and resets enabled accounts with an 
   const token = parseCookies(verifyRes.headers['set-cookie'])[SESSION_COOKIE_NAME];
   const session = getSessionByTokenHash(hashSessionToken(token));
   assert.equal(session.userId, user.id);
+});
+
+test('password reset verification locks a code after repeated wrong attempts', async () => {
+  const user = createUser({
+    email: 'lock-reset@example.com',
+    username: 'lock-reset@example.com',
+    name: 'Lock Reset',
+    passwordHash: hashPassword('old-password-123'),
+  });
+  const app = registerRoutes({ maxEmailCodeVerifyAttempts: 2 });
+  const requestRoute = route(app, 'POST', '/api/auth/password-reset/request');
+  const verifyRoute = route(app, 'POST', '/api/auth/password-reset/verify');
+
+  const requestRes = createMockRes();
+  await runRoute(requestRoute, {
+    body: { email: user.email },
+    headers: { 'user-agent': 'Reset Browser' },
+    socket: { remoteAddress: '198.51.100.84' },
+  }, requestRes);
+
+  assert.equal(requestRes.statusCode, 200);
+  assert.match(requestRes.body.delivery.devCode, /^\d{6}$/);
+
+  for (const code of ['100001', '100002']) {
+    const wrongRes = createMockRes();
+    await runRoute(verifyRoute, {
+      body: {
+        email: user.email,
+        code,
+        password: 'new-password-456',
+      },
+      headers: { 'user-agent': 'Reset Browser' },
+      socket: { remoteAddress: '198.51.100.84' },
+    }, wrongRes);
+    assert.equal(wrongRes.statusCode, 400);
+    assert.match(wrongRes.body.error, /expired or invalid/i);
+  }
+
+  assert.equal(getLatestEmailVerification(user.email, 'password-reset'), null);
+
+  const correctAfterLockRes = createMockRes();
+  await runRoute(verifyRoute, {
+    body: {
+      email: user.email,
+      code: requestRes.body.delivery.devCode,
+      password: 'new-password-456',
+    },
+    headers: { 'user-agent': 'Reset Browser' },
+    socket: { remoteAddress: '198.51.100.84' },
+  }, correctAfterLockRes);
+
+  assert.equal(correctAfterLockRes.statusCode, 400);
+  assert.match(correctAfterLockRes.body.error, /expired or invalid/i);
+
+  const unchangedUser = getUserByEmail(user.email, true);
+  assert.equal(verifyPassword('old-password-123', unchangedUser.passwordHash), true);
 });
 
 test('password reset rejects disabled accounts and consumes stale verification records', async () => {

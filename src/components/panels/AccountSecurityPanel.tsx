@@ -9,6 +9,7 @@ import {
 } from '../../lib/apiProxy';
 import { formatSessionDate, formatSessionDevice, formatSessionIp, sortSessionsForDisplay } from '../../lib/sessionDisplay';
 import { cn } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 
 interface AccountSecurityPanelProps {
   isOpen: boolean;
@@ -98,11 +99,7 @@ export function AccountSecurityPanel({ isOpen, currentUser, onClose, onSessionIn
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-[70] flex justify-end bg-black/40 backdrop-blur-sm" onClick={onClose}>
-      <aside
-        className="flex h-full w-full max-w-[440px] flex-col border-l border-panel-border bg-panel-bg shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      >
+    <FloatingWindow placement="right" contentClassName="h-full w-full max-w-[440px] flex-col">
         <div className="border-b border-panel-border p-4">
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-300">
@@ -176,8 +173,7 @@ export function AccountSecurityPanel({ isOpen, currentUser, onClose, onSessionIn
         <div className="border-t border-panel-border px-4 py-3 text-[11px] leading-5 text-gray-500">
           你可以单独退出某台设备，也可以一键退出所有设备。退出当前设备后需要重新登录。
         </div>
-      </aside>
-    </div>
+    </FloatingWindow>
   );
 }
 

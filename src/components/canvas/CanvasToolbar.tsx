@@ -10,7 +10,7 @@ export function CanvasToolbar() {
   const redoEnabled = canRedo();
 
   return (
-    <div className="flex items-center gap-1 rounded-lg border border-panel-border bg-panel-bg/90 px-2 py-1.5 shadow-lg backdrop-blur-sm">
+    <div className="flex items-center gap-1 rounded-lg border border-panel-border bg-[#11161c] px-2 py-1.5 shadow-lg">
       <button
         onClick={() => zoomIn()}
         className="rounded-md p-1.5 text-gray-400 transition-colors hover:bg-gray-700/50"

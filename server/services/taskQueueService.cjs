@@ -1,13 +1,5 @@
-const {
-  addTaskLog,
-  claimQueuedTask,
-  countQueuedTasks,
-  getTask,
-  listQueuedTasks,
-  markRunningTasksInterrupted,
-  updateTask,
-} = require('../db.cjs');
 const { safeTaskError } = require('../httpErrors.cjs');
+const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
 
 function previewText(value, limit = 160) {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
@@ -143,12 +135,15 @@ function createTaskQueueService({
   concurrency = 2,
   handlers = {},
   name = 'default',
+  pollIntervalMs = 1000,
   recoverRunning = true,
+  taskRepository = defaultTaskRepository,
 } = {}) {
   const transientPayloads = new Map();
   let activeCount = 0;
   let scheduled = false;
   let scheduledTimer = null;
+  let pollTimer = null;
   let stopped = false;
   const activeRuns = new Set();
   const supportedNodeTypes = Object.keys(handlers);
@@ -164,6 +159,17 @@ function createTaskQueueService({
     }, 0);
   }
 
+  function startPolling() {
+    if (stopped || pollTimer || pollIntervalMs <= 0) return;
+    pollTimer = setInterval(schedule, pollIntervalMs);
+  }
+
+  function stopPolling() {
+    if (!pollTimer) return;
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
   async function runTask(task) {
     activeCount += 1;
     const startedAt = Date.now();
@@ -171,10 +177,10 @@ function createTaskQueueService({
     transientPayloads.delete(task.id);
 
     try {
-      const claimed = claimQueuedTask(task.id);
+      const claimed = taskRepository.claimQueuedTask(task.id);
       if (!claimed) return;
 
-      addTaskLog(claimed.id, {
+      taskRepository.addTaskLog(claimed.id, {
         event: 'started',
         message: 'Task started by local worker.',
       });
@@ -189,9 +195,9 @@ function createTaskQueueService({
 
       await handler(claimed, payload);
 
-      const latest = getTask(claimed.id);
+      const latest = taskRepository.getTask(claimed.id);
       if (latest?.status === 'succeeded') {
-        addTaskLog(claimed.id, {
+        taskRepository.addTaskLog(claimed.id, {
           event: 'succeeded',
           message: 'Task completed successfully.',
           data: {
@@ -203,7 +209,7 @@ function createTaskQueueService({
           },
         });
       } else if (latest?.status === 'failed') {
-        addTaskLog(claimed.id, {
+        taskRepository.addTaskLog(claimed.id, {
           level: 'error',
           event: 'failed',
           message: latest.error?.message || 'Task execution failed.',
@@ -217,7 +223,7 @@ function createTaskQueueService({
           },
         });
       } else if (latest?.status === 'cancelled') {
-        addTaskLog(claimed.id, {
+        taskRepository.addTaskLog(claimed.id, {
           level: 'warn',
           event: 'cancelled',
           message: 'Task was cancelled.',
@@ -232,17 +238,17 @@ function createTaskQueueService({
         });
       }
     } catch (error) {
-      const latest = getTask(task.id);
+      const latest = taskRepository.getTask(task.id);
       const taskError = safeTaskError(error, 'Task execution failed.');
       if (latest && latest.status !== 'cancelled') {
-        updateTask(task.id, {
+        taskRepository.updateTask(task.id, {
           status: 'failed',
           error: taskError,
           durationMs: Date.now() - startedAt,
         });
       }
       if (latest?.status === 'cancelled') {
-        addTaskLog(task.id, {
+        taskRepository.addTaskLog(task.id, {
           level: 'warn',
           event: 'cancelled',
           message: 'Task was cancelled.',
@@ -257,7 +263,7 @@ function createTaskQueueService({
         });
         return;
       }
-      addTaskLog(task.id, {
+      taskRepository.addTaskLog(task.id, {
         level: 'error',
         event: 'failed',
         message: taskError.message || 'Task execution failed.',
@@ -279,7 +285,7 @@ function createTaskQueueService({
   function drain() {
     if (stopped) return;
     while (activeCount < concurrency) {
-      const next = listQueuedTasks(1, supportedNodeTypes)[0];
+      const next = taskRepository.listQueuedTasks(1, supportedNodeTypes)[0];
       if (!next) return;
       const run = runTask(next);
       activeRuns.add(run);
@@ -289,13 +295,11 @@ function createTaskQueueService({
     }
   }
 
-  function enqueue(task, payload = {}) {
+  function recordQueued(task, message = 'Task queued for local worker.') {
     if (!task?.id) return null;
-    stopped = false;
-    transientPayloads.set(task.id, payload);
-    addTaskLog(task.id, {
+    taskRepository.addTaskLog(task.id, {
       event: 'queued',
-      message: 'Task queued for local worker.',
+      message,
       data: {
         nodeType: task.nodeType,
         providerId: task.providerId,
@@ -303,6 +307,15 @@ function createTaskQueueService({
         input: summarizeTaskInput(task.input || {}),
       },
     });
+    return task;
+  }
+
+  function enqueue(task, payload = {}) {
+    if (!task?.id) return null;
+    stopped = false;
+    startPolling();
+    transientPayloads.set(task.id, payload);
+    recordQueued(task);
     schedule();
     return task;
   }
@@ -310,14 +323,16 @@ function createTaskQueueService({
   function start() {
     stopped = false;
     if (recoverRunning) {
-      markRunningTasksInterrupted('Task was interrupted by a server restart.', supportedNodeTypes);
+      taskRepository.markRunningTasksInterrupted('Task was interrupted by a server restart.', supportedNodeTypes);
     }
+    startPolling();
     schedule();
   }
 
   function stop() {
     stopped = true;
     transientPayloads.clear();
+    stopPolling();
     if (scheduledTimer) {
       clearTimeout(scheduledTimer);
       scheduledTimer = null;
@@ -331,8 +346,9 @@ function createTaskQueueService({
       name,
       nodeTypes: supportedNodeTypes,
       concurrency,
+      pollIntervalMs,
       activeCount,
-      queuedCount: countQueuedTasks(supportedNodeTypes),
+      queuedCount: taskRepository.countQueuedTasks(supportedNodeTypes),
       scheduled,
       stopped,
     };
@@ -342,6 +358,7 @@ function createTaskQueueService({
     drain,
     enqueue,
     getStats,
+    recordQueued,
     start,
     stop,
   };

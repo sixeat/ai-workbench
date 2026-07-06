@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { ArrowDown, ArrowUp, CheckSquare, Copy, ExternalLink, FileVideo, FolderOpen, ImagePlus, Pencil, Plus, RefreshCw, Save, Square, Star, Trash2, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 import {
   proxyAssetUrl,
   proxyAddAssetToCollection,
@@ -24,6 +25,7 @@ import {
   formatAssetLibraryPageSummary,
   formatSuggestedRolesText,
   getSuggestedRoles,
+  listAssetCollectionsForLibrary,
   listCollectionLibraryAssets,
   listUngroupedLibraryAssets,
   mergeLibraryAssetPages,
@@ -90,14 +92,8 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
   );
 
   const filteredCollections = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    if (!query) return collections;
-    return collections.filter((collection) =>
-      collection.name.toLowerCase().includes(query) ||
-      collection.category.toLowerCase().includes(query) ||
-      (collection.description || '').toLowerCase().includes(query)
-    );
-  }, [collections, search]);
+    return listAssetCollectionsForLibrary(collections, { search, templates: collectionTemplates });
+  }, [collectionTemplates, collections, search]);
 
   const recentUngroupedAssets = useMemo(() => {
     return listUngroupedLibraryAssets(collections, assets, { search, limit: 48 });
@@ -452,13 +448,13 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
       <div
         key={asset.id}
         className={cn(
-          'overflow-hidden rounded-lg border border-panel-border bg-black/20',
+          'overflow-hidden rounded-lg border border-panel-border bg-[#151a20]',
           selected && 'border-accent ring-1 ring-accent/70'
         )}
       >
         <div className="relative">
           <button
-            className="flex aspect-square w-full items-center justify-center bg-black/30"
+            className="flex aspect-square w-full items-center justify-center bg-[#0c0f12]"
             onClick={() => previewAsset(asset)}
             title={image ? '预览大图' : '打开视频'}
           >
@@ -479,10 +475,10 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                 toggleUngroupedAssetSelection(asset.id);
               }}
               className={cn(
-                'absolute left-2 top-2 rounded-md border px-1.5 py-1 text-[10px] shadow-lg backdrop-blur',
+                'absolute left-2 top-2 rounded-md border px-1.5 py-1 text-[10px] shadow-lg',
                 selected
                   ? 'border-accent bg-accent text-white'
-                  : 'border-white/15 bg-black/60 text-gray-200 hover:border-accent hover:text-accent'
+                  : 'border-panel-border bg-[#11161c] text-gray-200 hover:border-accent hover:text-accent'
               )}
               title={selected ? '取消选择' : '选择素材'}
             >
@@ -587,9 +583,9 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
   if (!isOpen) return null;
 
   return (
-    <div className="absolute bottom-4 right-4 z-50 flex h-[76vh] w-[860px] overflow-hidden rounded-xl border border-panel-border bg-panel-bg shadow-2xl">
-      <div className="flex w-72 flex-col border-r border-panel-border bg-canvas-bg/50">
-        <div className="flex items-center gap-2 border-b border-panel-border px-3 py-2">
+    <FloatingWindow contentClassName="h-[78vh] w-[980px]">
+        <div className="floating-window-sidebar w-[260px]">
+        <div className="floating-window-header">
           <div className="text-sm font-medium text-white">素材库</div>
           <span className="rounded bg-panel-bg px-1.5 py-0.5 text-[10px] text-gray-500">{assetSummary}</span>
           {notice && <span className="truncate text-[10px] text-emerald-300">{notice}</span>}
@@ -616,7 +612,7 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
           </div>
 
           {showCreateForm && (
-            <div className="mt-3 space-y-2 rounded-lg border border-panel-border bg-panel-bg/70 p-2.5">
+            <div className="mt-3 space-y-2 rounded-lg border border-panel-border bg-panel-bg p-2.5">
               <div className="text-[11px] font-medium text-gray-300">新建素材集合</div>
               <div className="grid grid-cols-2 gap-1.5">
                 {collectionTemplates.map((template) => (
@@ -701,7 +697,7 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                     onClick={() => setSelectedId(collection.id)}
                     className={cn('flex w-full gap-2 rounded-lg border p-2 text-left transition-colors', active ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg hover:border-gray-600')}
                   >
-                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md bg-black/30">
+                    <div className="flex h-12 w-12 items-center justify-center overflow-hidden rounded-md bg-[#0c0f12]">
                       {cover && isImageAsset(cover) ? (
                         <img src={proxyAssetUrl(cover.url)} alt={collection.name} className="h-full w-full object-cover" />
                       ) : (
@@ -737,7 +733,7 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
         </div>
       </div>
 
-      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="floating-window-content">
         <div className="border-b border-panel-border px-4 py-3">
           {selectedCollection && editingCollection ? (
             <div className="space-y-2">
@@ -972,8 +968,8 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
             </div>
           )}
         </div>
-      </div>
-    </div>
+        </div>
+    </FloatingWindow>
   );
 }
 

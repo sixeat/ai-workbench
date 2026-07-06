@@ -47,7 +47,7 @@ export function SmartEdge({
       {label && (
         <EdgeLabelRenderer>
           <div
-            className="pointer-events-none absolute rounded-md border border-panel-border bg-panel-bg/95 px-2 py-1 text-[10px] font-semibold text-gray-100 opacity-0 shadow-lg transition-opacity group-hover/edge:opacity-100"
+            className="pointer-events-none absolute rounded-md border border-panel-border bg-[#11161c] px-2 py-1 text-[10px] font-semibold text-gray-100 opacity-0 shadow-lg transition-opacity group-hover/edge:opacity-100"
             style={{
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
               opacity: selected ? 1 : undefined,

@@ -2,9 +2,13 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   categoryLabel,
+  collectionAssetIdSet,
+  collectionHasAsset,
+  filterAssetsNotInCollection,
   formatAssetLibraryPageSummary,
   formatSuggestedRolesText,
   getSuggestedRoles,
+  listAssetCollectionsForLibrary,
   listCollectionLibraryAssets,
   listUngroupedLibraryAssets,
   mergeLibraryAssetPages,
@@ -83,6 +87,28 @@ test('asset library helper filters ungrouped assets by search and limit', () => 
   );
 });
 
+test('asset collection membership helpers detect and filter existing assets', () => {
+  const collection = {
+    assets: [
+      { id: 'asset-a' },
+      { id: ' ' },
+      { id: 'asset-b' },
+    ],
+  };
+
+  assert.deepEqual([...collectionAssetIdSet(collection)], ['asset-a', 'asset-b']);
+  assert.equal(collectionHasAsset(collection, 'asset-a'), true);
+  assert.equal(collectionHasAsset(collection, 'asset-c'), false);
+  assert.deepEqual(
+    filterAssetsNotInCollection([
+      { id: 'asset-a', fileName: 'already.png' },
+      { id: 'asset-c', fileName: 'new.png' },
+      { id: '', fileName: 'missing-id.png' },
+    ], collection).map((asset) => asset.id),
+    ['asset-c']
+  );
+});
+
 test('asset library helper filters collection assets by role and search', () => {
   const front = { id: 'front', fileName: 'front-view.png', libraryRole: '正面', prompt: 'hero standing' };
   const face = { id: 'face', fileName: 'face-closeup.png', libraryRole: '脸部特写', prompt: 'hero expression' };
@@ -99,6 +125,47 @@ test('asset library helper filters collection assets by role and search', () => 
   assert.deepEqual(
     listCollectionLibraryAssets([front, face, scene], { role: 'all', search: 'hero' }).map((asset) => asset.id),
     ['front', 'face']
+  );
+});
+
+test('asset library helper searches collections by category label roles and grouped assets', () => {
+  const characterCollection = {
+    id: 'collection-character',
+    name: '女主 A',
+    category: 'character',
+    description: '主角素材',
+    metadata: { suggestedRoles: ['三视图', '脸部特写'] },
+    assets: [
+      { id: 'asset-front', fileName: 'front.png', libraryRole: '正面' },
+      { id: 'asset-expression', fileName: 'smile.png', libraryRole: '表情', libraryNote: 'wink mood' },
+    ],
+  };
+  const sceneCollection = {
+    id: 'collection-scene',
+    name: '雨夜街区',
+    category: 'scene',
+    description: '夜晚街景',
+    metadata: {},
+    assets: [
+      { id: 'asset-street', fileName: 'street.png', libraryRole: '环境' },
+    ],
+  };
+
+  assert.deepEqual(
+    listAssetCollectionsForLibrary([characterCollection, sceneCollection], { search: '角色' }).map((collection) => collection.id),
+    ['collection-character']
+  );
+  assert.deepEqual(
+    listAssetCollectionsForLibrary([characterCollection, sceneCollection], { search: '脸部特写' }).map((collection) => collection.id),
+    ['collection-character']
+  );
+  assert.deepEqual(
+    listAssetCollectionsForLibrary([characterCollection, sceneCollection], { search: 'wink' }).map((collection) => collection.id),
+    ['collection-character']
+  );
+  assert.deepEqual(
+    listAssetCollectionsForLibrary([characterCollection, sceneCollection], { search: '环境' }).map((collection) => collection.id),
+    ['collection-scene']
   );
 });
 

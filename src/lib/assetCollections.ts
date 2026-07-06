@@ -10,6 +10,14 @@ export interface AssetCollectionLike {
   assets: Array<{ id: string }>;
 }
 
+export interface AssetCollectionSearchLike extends AssetCollectionLike {
+  name: string;
+  category: string;
+  description?: string;
+  metadata?: Record<string, unknown>;
+  assets: LibraryAssetLike[];
+}
+
 export interface LibraryAssetLike {
   id: string;
   fileName?: string;
@@ -132,6 +140,34 @@ export function listCollectionLibraryAssets<T extends LibraryAssetLike>(
     .filter((asset) => assetMatchesSearch(asset, query));
 }
 
+function collectionMatchesSearch(
+  collection: AssetCollectionSearchLike,
+  query: string,
+  templates: readonly CollectionTemplate[]
+): boolean {
+  if (!query) return true;
+  const roles = getSuggestedRoles(collection, templates);
+  const category = categoryLabel(collection.category, templates);
+
+  return [
+    collection.name,
+    collection.category,
+    category,
+    collection.description,
+    ...roles,
+  ].some((value) => String(value || '').toLowerCase().includes(query)) ||
+    collection.assets.some((asset) => assetMatchesSearch(asset, query));
+}
+
+export function listAssetCollectionsForLibrary<T extends AssetCollectionSearchLike>(
+  collections: readonly T[],
+  options: { search?: string; templates?: readonly CollectionTemplate[] } = {}
+): T[] {
+  const query = String(options.search || '').trim().toLowerCase();
+  const templates = options.templates || COLLECTION_TEMPLATES;
+  return collections.filter((collection) => collectionMatchesSearch(collection, query, templates));
+}
+
 export function listUngroupedLibraryAssets<T extends LibraryAssetLike>(
   collections: readonly AssetCollectionLike[],
   assets: readonly T[],
@@ -145,6 +181,28 @@ export function listUngroupedLibraryAssets<T extends LibraryAssetLike>(
     .filter((asset) => !groupedIds.has(asset.id))
     .filter((asset) => assetMatchesSearch(asset, query))
     .slice(0, limit);
+}
+
+export function collectionAssetIdSet(collection?: AssetCollectionLike | null): Set<string> {
+  return new Set((collection?.assets || [])
+    .map((asset) => String(asset.id || '').trim())
+    .filter(Boolean));
+}
+
+export function collectionHasAsset(collection: AssetCollectionLike | null | undefined, assetId: string): boolean {
+  const id = String(assetId || '').trim();
+  return Boolean(id && collectionAssetIdSet(collection).has(id));
+}
+
+export function filterAssetsNotInCollection<T extends { id?: string }>(
+  assets: readonly T[],
+  collection?: AssetCollectionLike | null
+): T[] {
+  const existingIds = collectionAssetIdSet(collection);
+  return assets.filter((asset) => {
+    const id = String(asset.id || '').trim();
+    return id && !existingIds.has(id);
+  });
 }
 
 export function mergeLibraryAssetPages<T extends LibraryAssetLike>(current: readonly T[], next: readonly T[]): T[] {

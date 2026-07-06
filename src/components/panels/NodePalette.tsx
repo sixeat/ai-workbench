@@ -124,7 +124,7 @@ export function NodePalette() {
                 </button>
 
                 {showAdvancedParameters && (
-                  <div className="mt-1 space-y-0.5 rounded-lg bg-canvas-bg/40 p-1">
+                  <div className="mt-1 space-y-0.5 rounded-lg bg-[#0c0f12] p-1">
                     {parameterNodes.map(renderNodeButton)}
                   </div>
                 )}
@@ -134,7 +134,7 @@ export function NodePalette() {
         </div>
       )}
 
-      <div className="flex items-center gap-2 rounded-full border border-panel-border bg-panel-bg/90 px-2 py-2 shadow-xl shadow-accent/10 backdrop-blur-sm">
+      <div className="flex items-center gap-2 rounded-full border border-panel-border bg-[#11161c] px-2 py-2 shadow-xl shadow-accent/10">
         <button
           onClick={() => setShowMenu(!showMenu)}
           className={cn(

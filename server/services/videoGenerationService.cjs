@@ -1,15 +1,5 @@
 const { randomUUID } = require('crypto');
 const {
-  addTaskLog,
-  createTask,
-  getTask,
-  getTaskForUser,
-  insertAsset,
-  linkTaskAsset,
-  listTaskAssets,
-  updateTask,
-} = require('../db.cjs');
-const {
   filterVideoBodyByCapabilities,
   getModelCapabilities,
 } = require('../modelCapabilities.cjs');
@@ -26,9 +16,11 @@ const {
 const { fetchPublicUrl } = require('./networkGuard.cjs');
 const { getVideoProviderAdapter } = require('./videoProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
+const { assetRepository: defaultAssetRepository } = require('../repositories/assetRepository.cjs');
+const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
 
-function createVideoTask(userId, body, status = 'queued') {
-  return createTask({
+function createVideoTask(userId, body, status = 'queued', taskRepository = defaultTaskRepository) {
+  return taskRepository.createTask({
     id: randomUUID(),
     userId,
     nodeType: 'video',
@@ -75,8 +67,8 @@ function createVideoTask(userId, body, status = 'queued') {
   });
 }
 
-function taskWasCancelled(taskId) {
-  return getTask(taskId)?.status === 'cancelled';
+function taskWasCancelled(taskId, taskRepository = defaultTaskRepository) {
+  return taskRepository.getTask(taskId)?.status === 'cancelled';
 }
 
 function elapsedSinceCreated(task) {
@@ -84,9 +76,20 @@ function elapsedSinceCreated(task) {
   return Math.max(0, Date.now() - createdAt);
 }
 
-async function saveGeneratedVideo({ assetStorage, userId, taskId, videoUrl, prompt, model, providerId, uploadLimits = {} }) {
+async function saveGeneratedVideo({
+  assetRepository,
+  assetStorage,
+  userId,
+  taskId,
+  videoUrl,
+  prompt,
+  model,
+  providerId,
+  taskRepository,
+  uploadLimits = {},
+}) {
   if (!assetStorage || !videoUrl) return null;
-  const existing = listTaskAssets(taskId).find((asset) => asset.type === 'video');
+  const existing = taskRepository.listTaskAssets(taskId).find((asset) => asset.type === 'video');
   if (existing) return existing;
 
   const response = await fetchPublicUrl(videoUrl);
@@ -95,7 +98,7 @@ async function saveGeneratedVideo({ assetStorage, userId, taskId, videoUrl, prom
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
-  const limitError = assertAssetStorageQuota({ userId, sizeBytes: buffer.length, uploadLimits });
+  const limitError = assertAssetStorageQuota({ userId, sizeBytes: buffer.length, uploadLimits, assetRepository });
   if (limitError) throw toExposedQuotaError(limitError);
 
   const stored = await assetStorage.save(buffer, {
@@ -105,11 +108,11 @@ async function saveGeneratedVideo({ assetStorage, userId, taskId, videoUrl, prom
     model,
     providerId,
   });
-  const asset = insertAsset({
+  const asset = assetRepository.insertAsset({
     ...stored,
     userId,
   });
-  linkTaskAsset(taskId, asset.id);
+  taskRepository.linkTaskAsset(taskId, asset.id);
   return asset;
 }
 
@@ -119,6 +122,8 @@ function createVideoGenerationService({
   publicAsset,
   proxyRequest,
   resolveApiCredentials,
+  assetRepository = defaultAssetRepository,
+  taskRepository = defaultTaskRepository,
   uploadLimits = {},
 }) {
   async function runVideoTask({ req, userId, body = {}, secrets, task }) {
@@ -126,7 +131,7 @@ function createVideoGenerationService({
     const activeTask = task || createVideoTask(userId, {
       ...body,
       publicBaseUrl: body.publicBaseUrl || getPublicBaseUrl(req),
-    }, 'running');
+    }, 'running', taskRepository);
     const taskBody = {
       ...(activeTask.input || {}),
       ...body,
@@ -135,8 +140,8 @@ function createVideoGenerationService({
     const workerReq = req || { headers: {}, publicBaseUrl: taskBody.publicBaseUrl };
 
     try {
-      if (taskWasCancelled(activeTask.id)) {
-        addTaskLog(activeTask.id, {
+      if (taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.addTaskLog(activeTask.id, {
           level: 'warn',
           event: 'cancelled_before_start',
           message: 'Task was cancelled before the video worker started.',
@@ -160,7 +165,7 @@ function createVideoGenerationService({
       });
 
       if (!apiKey) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'API key is required' },
           durationMs: Date.now() - startedAt,
@@ -172,7 +177,7 @@ function createVideoGenerationService({
       const arkBody = resolvedAdapter.buildCapabilityBody({ body: taskBody, req: workerReq });
 
       if (!arkBody.model) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'model is required' },
           durationMs: Date.now() - startedAt,
@@ -180,7 +185,7 @@ function createVideoGenerationService({
         return { status: 400, data: { error: 'model is required' } };
       }
       if (!arkBody.content.length) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'content is required' },
           durationMs: Date.now() - startedAt,
@@ -192,7 +197,7 @@ function createVideoGenerationService({
       const capabilityResult = filterVideoBodyByCapabilities(arkBody, capabilities);
 
       if (!capabilityResult.ok) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
           durationMs: Date.now() - startedAt,
@@ -222,7 +227,7 @@ function createVideoGenerationService({
           statusText: result.statusText,
           error: upstreamError,
         });
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: upstreamError,
           durationMs: Date.now() - startedAt,
@@ -248,7 +253,7 @@ function createVideoGenerationService({
         upstream: resolvedAdapter.summarizeUpstream(result.data),
       };
 
-      addTaskLog(activeTask.id, {
+      taskRepository.addTaskLog(activeTask.id, {
         event: 'upstream_video_submitted',
         message: 'Video task submitted to upstream provider.',
         data: {
@@ -259,11 +264,22 @@ function createVideoGenerationService({
         },
       });
 
-      if (taskWasCancelled(activeTask.id)) {
+      if (taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.addTaskLog(activeTask.id, {
+          level: 'warn',
+          event: 'cancelled_after_upstream',
+          message: 'Video upstream request finished after cancellation; output was not written.',
+          data: {
+            upstreamTaskId: output.upstream?.taskId || '',
+            upstreamStatus: output.upstream?.status || '',
+            providerId,
+            model: arkBody.model,
+          },
+        });
         return { status: 409, data: { error: 'Task was cancelled.' } };
       }
 
-      updateTask(activeTask.id, {
+      taskRepository.updateTask(activeTask.id, {
         status: 'running',
         output,
         error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
@@ -274,7 +290,7 @@ function createVideoGenerationService({
         status: 202,
         data: {
           taskId: activeTask.id,
-          task: getTask(activeTask.id),
+          task: taskRepository.getTask(activeTask.id),
           data: result.data,
           request: output.request,
           warnings: capabilityResult.warnings,
@@ -282,8 +298,8 @@ function createVideoGenerationService({
       };
     } catch (error) {
       console.error('/api/videos task error:', error);
-      if (activeTask && !taskWasCancelled(activeTask.id)) {
-        updateTask(activeTask.id, {
+      if (activeTask && !taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: safeTaskError(error, 'Video generation failed.'),
           durationMs: Date.now() - startedAt,
@@ -305,12 +321,12 @@ function createVideoGenerationService({
       task: createVideoTask(userId, {
         ...body,
         publicBaseUrl: getPublicBaseUrl(req),
-      }, 'running'),
+      }, 'running', taskRepository),
     });
   }
 
   async function getVideoTask({ taskId, userId, query, secrets }) {
-    const localTask = getTaskForUser(taskId, userId);
+    const localTask = taskRepository.getTaskForUser(taskId, userId);
     const localOutput = localTask?.output || {};
     const upstreamTaskId = localTask?.nodeType === 'video'
       ? localOutput?.upstream?.taskId || query.upstreamTaskId || taskId
@@ -345,14 +361,14 @@ function createVideoGenerationService({
       if (localTask?.nodeType === 'video') {
         const durationMs = elapsedSinceCreated(localTask);
         const taskError = safeUpstreamTaskError(result, 'Video task lookup upstream request failed.');
-        updateTask(localTask.id, {
+        taskRepository.updateTask(localTask.id, {
           status: 'failed',
           output: localTask.output || {},
           error: taskError,
           durationMs,
         });
         if (localTask.status !== 'failed') {
-          addTaskLog(localTask.id, {
+          taskRepository.addTaskLog(localTask.id, {
             level: 'error',
             event: 'upstream_video_lookup_failed',
             message: taskError.message || 'Video task lookup upstream request failed.',
@@ -390,14 +406,14 @@ function createVideoGenerationService({
       if (!videoUrl) {
         const durationMs = elapsedSinceCreated(localTask);
         const error = { message: 'Video task succeeded upstream, but no video URL was found.' };
-        const updated = updateTask(localTask.id, {
+        const updated = taskRepository.updateTask(localTask.id, {
           status: 'failed',
           output: nextOutput,
           error,
           durationMs,
         });
         if (localTask.status !== 'failed') {
-          addTaskLog(localTask.id, {
+          taskRepository.addTaskLog(localTask.id, {
             level: 'error',
             event: 'upstream_video_missing_url',
             message: error.message,
@@ -424,19 +440,21 @@ function createVideoGenerationService({
           prompt: localTask.input?.prompt || '',
           model: localTask.model,
           providerId,
+          assetRepository,
+          taskRepository,
           uploadLimits,
         });
       } catch (error) {
         const durationMs = elapsedSinceCreated(localTask);
         const taskError = safeTaskError(error, 'Video asset save failed.');
-        const updated = updateTask(localTask.id, {
+        const updated = taskRepository.updateTask(localTask.id, {
           status: 'failed',
           output: nextOutput,
           error: taskError,
           durationMs,
         });
         if (localTask.status !== 'failed') {
-          addTaskLog(localTask.id, {
+          taskRepository.addTaskLog(localTask.id, {
             level: 'error',
             event: 'upstream_video_asset_save_failed',
             message: taskError.message,
@@ -463,14 +481,14 @@ function createVideoGenerationService({
         ...nextOutput,
         video: asset ? publicAsset(asset) : null,
       };
-      const updated = updateTask(localTask.id, {
+      const updated = taskRepository.updateTask(localTask.id, {
         status: 'succeeded',
         output,
         error: null,
         durationMs: elapsedSinceCreated(localTask),
       });
       if (localTask.status !== 'succeeded') {
-        addTaskLog(localTask.id, {
+        taskRepository.addTaskLog(localTask.id, {
           event: 'upstream_video_succeeded',
           message: 'Video task completed upstream and the asset was saved.',
           data: {
@@ -499,14 +517,14 @@ function createVideoGenerationService({
             upstreamTaskStatus: upstream.status || '',
           }
         : { message: 'Video task cancelled upstream.', upstreamTaskStatus: upstream.status || '' };
-      const updated = updateTask(localTask.id, {
+      const updated = taskRepository.updateTask(localTask.id, {
         status: normalizedStatus,
         output: nextOutput,
         error,
         durationMs,
       });
       if (localTask.status !== normalizedStatus) {
-        addTaskLog(localTask.id, {
+        taskRepository.addTaskLog(localTask.id, {
           level: normalizedStatus === 'failed' ? 'error' : 'warn',
           event: normalizedStatus === 'failed' ? 'upstream_video_failed' : 'upstream_video_cancelled',
           message: error.message,
@@ -523,7 +541,7 @@ function createVideoGenerationService({
       return { status: result.status, data: { task: updated, data: result.data } };
     }
 
-    const updated = updateTask(localTask.id, {
+    const updated = taskRepository.updateTask(localTask.id, {
       status: 'running',
       output: nextOutput,
     });
@@ -531,7 +549,8 @@ function createVideoGenerationService({
   }
 
   return {
-    createVideoTask,
+    createVideoTask: (userId, body, status = 'queued') =>
+      createVideoTask(userId, body, status, taskRepository),
     generateVideo,
     getVideoTask,
     runVideoTask,

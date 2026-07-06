@@ -1,10 +1,7 @@
 const fs = require('fs');
-const path = require('path');
 const Database = require('better-sqlite3');
-
-const DEFAULT_USER_ID = 'local-user';
-const DATA_DIR = process.env.WORKBENCH_DATA_DIR || path.join(__dirname, '..', 'data');
-const DB_PATH = process.env.WORKBENCH_DB_PATH || path.join(DATA_DIR, 'ai-workbench.sqlite');
+const { DATA_DIR, DB_PATH } = require('./dataPaths.cjs');
+const { DEFAULT_USER_ID } = require('./defaults.cjs');
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
@@ -190,6 +187,7 @@ function migrate() {
       payload_json TEXT,
       expires_at TEXT NOT NULL,
       consumed_at TEXT,
+      attempt_count INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -245,6 +243,7 @@ function migrate() {
   ensureColumn('users', 'is_enabled', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('sessions', 'ip_address', 'TEXT');
   ensureColumn('sessions', 'user_agent', 'TEXT');
+  ensureColumn('email_verifications', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('assets', 'size_bytes', 'INTEGER');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)');
@@ -434,6 +433,7 @@ function rowToEmailVerification(row) {
     payload: jsonParse(row.payload_json, {}),
     expiresAt: row.expires_at,
     consumedAt: row.consumed_at,
+    attemptCount: Number(row.attempt_count || 0),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -687,8 +687,10 @@ function createEmailVerification({ email, purpose, codeHash, payload, expiresAt 
   const now = new Date().toISOString();
   const id = require('crypto').randomUUID();
   db.prepare(`
-    INSERT INTO email_verifications (id, email, purpose, code_hash, payload_json, expires_at, consumed_at, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)
+    INSERT INTO email_verifications (
+      id, email, purpose, code_hash, payload_json, expires_at, consumed_at, attempt_count, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, NULL, 0, ?, ?)
   `).run(id, email, purpose, codeHash, jsonStringify(payload || {}), expiresAt, now, now);
   return getEmailVerification(id);
 }
@@ -718,6 +720,19 @@ function consumeEmailVerification(id) {
       AND consumed_at IS NULL
   `).run(now, now, id);
   return result.changes > 0;
+}
+
+function incrementEmailVerificationAttempts(id) {
+  const now = new Date().toISOString();
+  const result = db.prepare(`
+    UPDATE email_verifications
+    SET attempt_count = attempt_count + 1,
+        updated_at = ?
+    WHERE id = ?
+      AND consumed_at IS NULL
+  `).run(now, id);
+  if (result.changes === 0) return null;
+  return getEmailVerification(id);
 }
 
 function createInvitationCode({ codeHash, label = '', role = 'user', maxUses = 1, expiresAt = null, createdBy = null }) {
@@ -1733,12 +1748,30 @@ function assetCollectionSearchWhere(query) {
     clause: `
       WHERE user_id = @userId
         AND (
-          LOWER(name) LIKE @search
-          OR LOWER(category) LIKE @search
-          OR LOWER(COALESCE(description, '')) LIKE @search
+          LOWER(name) LIKE @search ESCAPE '\\'
+          OR LOWER(category) LIKE @search ESCAPE '\\'
+          OR LOWER(COALESCE(description, '')) LIKE @search ESCAPE '\\'
+          OR LOWER(COALESCE(metadata_json, '')) LIKE @search ESCAPE '\\'
+          OR EXISTS (
+            SELECT 1
+            FROM asset_collection_items
+            JOIN assets ON assets.id = asset_collection_items.asset_id
+            WHERE asset_collection_items.collection_id = asset_collections.id
+              AND assets.user_id = asset_collections.user_id
+              AND (
+                LOWER(COALESCE(asset_collection_items.role, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(asset_collection_items.note, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(assets.file_name, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(assets.prompt, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(assets.model, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(assets.provider_id, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(assets.type, '')) LIKE @search ESCAPE '\\'
+                OR LOWER(COALESCE(assets.url, '')) LIKE @search ESCAPE '\\'
+              )
+          )
         )
     `,
-    params: { userId: query.userId, search: `%${query.search}%` },
+    params: { userId: query.userId, search: `%${escapeLike(query.search)}%` },
   };
 }
 
@@ -2077,6 +2110,7 @@ module.exports = {
   listAuditLogs,
   listInvitationCodes,
   listSessionsForUser,
+  incrementEmailVerificationAttempts,
   updateUserPassword,
   updateUserStatus,
   updateTask,

@@ -13,18 +13,21 @@ npm install
 npm run dev
 ```
 
-服务器运行：
+服务器部署前先选择模式：
 
 ```bash
 npm install
 cp .env.example .env
-npm run start:server
+npm run check:deploy
+npm run start:all
 ```
 
-打开：
+正式服务器推荐前端静态托管、后端只提供 API。具体配置见 [部署模式清单](docs/deployment-modes.md)。
+
+本地开发打开：
 
 ```text
-http://服务器IP:3000
+http://127.0.0.1:5173
 ```
 
 如果已经构建过，后续只启动服务：
@@ -97,7 +100,9 @@ flowchart LR
 | 文档 | 用途 |
 |---|---|
 | [使用说明](docs/user-guide.md) | 给实际使用者看的完整操作说明 |
+| [部署模式](docs/deployment-modes.md) | 本地开发、单机服务器、API/Worker 分进程配置 |
 | [服务器部署](docs/server-deploy.md) | 服务器部署、PM2、端口和故障排查 |
+| [前端静态托管](docs/frontend-static-hosting.md) | Nginx、Vercel、OSS/CDN 托管前端 |
 | [API 设计](docs/api-design-v2.md) | 后端 API 和数据结构设计 |
 
 ## 常用命令
@@ -149,7 +154,7 @@ IMAGE_OUTPUT_DIR=/home/admin/apps/ai-workbench-data/outputs
 
 ## 当前注意事项
 
-- 第一版还没有完整登录系统。公网给朋友用时，建议先加访问控制或放到受控网络里。
+- 服务器部署默认要求登录。首次部署前要配置管理员账号，或确认数据库里已经有启用的管理员。
 - `WORKBENCH_KEY_SECRET` 必须长期保存。改掉后，旧的服务器 Key 可能无法解密。
 - 服务器重启后是否自动恢复，取决于是否正确配置了 `pm2 startup`。
 - 如果浏览器打不开，但服务器 `curl 127.0.0.1:3000/api/health` 正常，通常是安全组或防火墙没放行 `3000`。

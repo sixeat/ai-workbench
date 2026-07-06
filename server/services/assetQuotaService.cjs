@@ -1,4 +1,4 @@
-const { sumAssetBytes } = require('../db.cjs');
+const { assetRepository: defaultAssetRepository } = require('../repositories/assetRepository.cjs');
 
 function formatMegabytes(bytes) {
   return `${Math.round((bytes / 1024 / 1024) * 10) / 10}MB`;
@@ -14,13 +14,13 @@ function quotaError(status, error, code) {
   return { status, error, code };
 }
 
-function assertAssetStorageQuota({ userId, sizeBytes, uploadLimits = {} }) {
+function assertAssetStorageQuota({ userId, sizeBytes, uploadLimits = {}, assetRepository = defaultAssetRepository }) {
   const maxUserAssetBytes = Number(uploadLimits.maxUserAssetBytes || 0);
   const nextSizeBytes = Number(sizeBytes || 0);
 
   if (maxUserAssetBytes <= 0 || nextSizeBytes <= 0) return null;
 
-  const currentBytes = sumAssetBytes(userId);
+  const currentBytes = assetRepository.sumAssetBytes(userId);
   if (currentBytes + nextSizeBytes <= maxUserAssetBytes) return null;
 
   return quotaError(
@@ -30,7 +30,7 @@ function assertAssetStorageQuota({ userId, sizeBytes, uploadLimits = {} }) {
   );
 }
 
-function assertUploadLimits({ userId, sizeBytes, uploadLimits = {} }) {
+function assertUploadLimits({ userId, sizeBytes, uploadLimits = {}, assetRepository = defaultAssetRepository }) {
   const maxFileBytes = Number(uploadLimits.maxFileBytes || 0);
   const maxDailyUploadBytes = Number(uploadLimits.maxDailyUploadBytes || 0);
 
@@ -42,11 +42,11 @@ function assertUploadLimits({ userId, sizeBytes, uploadLimits = {} }) {
     );
   }
 
-  const storageLimitError = assertAssetStorageQuota({ userId, sizeBytes, uploadLimits });
+  const storageLimitError = assertAssetStorageQuota({ userId, sizeBytes, uploadLimits, assetRepository });
   if (storageLimitError) return storageLimitError;
 
   if (maxDailyUploadBytes > 0) {
-    const uploadedToday = sumAssetBytes(userId, {
+    const uploadedToday = assetRepository.sumAssetBytes(userId, {
       providerId: 'upload',
       since: startOfTodayIso(),
     });

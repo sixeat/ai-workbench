@@ -9,13 +9,15 @@ import { getNodeConfigSchema, validateNodeConfig } from '../../engine/nodeIoSche
 import { getEditableEdgeOptions } from '../../lib/connectionInference';
 import {
   proxyAddAssetToCollection,
+  proxyAddAssetsToCollection,
   proxyAssetUrl,
   type ProxyAssetCollection,
   type ProxyModelCapabilities,
 } from '../../lib/apiProxy';
-import { getSuggestedRoles } from '../../lib/assetCollections';
+import { collectionHasAsset, filterAssetsNotInCollection, getSuggestedRoles } from '../../lib/assetCollections';
 import { loadAllAssetCollections } from '../../lib/assetCollectionCache';
 import { loadCachedModelCapabilities } from '../../lib/modelCapabilityCache';
+import { API_INSTANCE_SOURCE_LABELS, groupApiInstancesBySource } from '../../lib/apiInstanceDisplay';
 import {
   describeModelCapabilities,
   describeModelCapabilityFieldHint,
@@ -23,6 +25,7 @@ import {
   summarizeModelCapabilityUsage,
   validateNodeCapabilityUsage,
 } from '../../lib/modelCapabilities';
+import { uniqueNodeRunAssetIds } from '../../lib/nodeRunDisplay';
 import { useApiStore } from '../../stores/apiStore';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { NODE_COLORS, type ConfigField, type NodeData, type NodeRunSummary, type NodeType } from '../../types/nodes';
@@ -149,11 +152,27 @@ export function PropertiesPanel() {
     () => lastRun?.assets.filter((asset) => Boolean(asset.id)) || [],
     [lastRun]
   );
+  const addableRunAssetIds = useMemo(
+    () => uniqueNodeRunAssetIds(addableRunAssets),
+    [addableRunAssets]
+  );
+  const newRunAssets = useMemo(
+    () => selectedAssetCollection ? filterAssetsNotInCollection(addableRunAssets, selectedAssetCollection) : addableRunAssets,
+    [addableRunAssets, selectedAssetCollection]
+  );
+  const newRunAssetIds = useMemo(
+    () => uniqueNodeRunAssetIds(newRunAssets),
+    [newRunAssets]
+  );
 
   const availableInstances = useMemo(() => {
     if (!selectedNode) return [];
     return Object.values(instances).filter((item) => item.isEnabled && supportsNode(item.providerId, selectedNode.data.type));
   }, [instances, selectedNode]);
+  const groupedAvailableInstances = useMemo(
+    () => groupApiInstancesBySource(availableInstances),
+    [availableInstances]
+  );
 
   const modelOptions = useMemo(() => {
     if (!selectedInstanceId) return [];
@@ -264,6 +283,11 @@ export function PropertiesPanel() {
         setAssetLibraryError('这个产物没有资产 ID，暂时不能加入素材集合。');
         return;
       }
+      if (selectedAssetCollection && collectionHasAsset(selectedAssetCollection, asset.id)) {
+        setAssetLibraryNotice('这个产物已在当前集合中');
+        setAssetLibraryError('');
+        return;
+      }
       const collectionId = selectedAssetCollection?.id;
       if (!collectionId) {
         setAssetLibraryError('请先在素材库创建一个集合。');
@@ -281,7 +305,33 @@ export function PropertiesPanel() {
         setAssetLibraryError(error instanceof Error ? error.message : '加入素材集合失败');
       }
     },
-    [assetRole, assetRoles, selectedAssetCollection?.id]
+    [assetRole, assetRoles, selectedAssetCollection]
+  );
+
+  const handleAddAllRunAssetsToCollection = useCallback(
+    async () => {
+      if (newRunAssetIds.length === 0) {
+        setAssetLibraryError('最近一次运行没有可入库产物。');
+        return;
+      }
+      const collectionId = selectedAssetCollection?.id;
+      if (!collectionId) {
+        setAssetLibraryError('请先在素材库创建一个集合。');
+        return;
+      }
+
+      try {
+        const result = await proxyAddAssetsToCollection(collectionId, {
+          assetIds: newRunAssetIds,
+          role: assetRole || assetRoles[0] || '生成图',
+        });
+        setAssetLibraryNotice(`已加入 ${result.added} 个产物${result.skipped ? `，跳过 ${result.skipped} 个` : ''}`);
+        setAssetLibraryError('');
+      } catch (error) {
+        setAssetLibraryError(error instanceof Error ? error.message : '批量加入素材集合失败');
+      }
+    },
+    [assetRole, assetRoles, newRunAssetIds, selectedAssetCollection?.id]
   );
 
   const shouldHideField = (field: ConfigField): boolean => {
@@ -348,11 +398,20 @@ export function PropertiesPanel() {
             {field.key === 'instanceId' && (
               <>
                 <option value="">选择 API 实例</option>
-                {availableInstances.map((inst) => (
-                  <option key={inst.id} value={inst.id}>
-                    {inst.name} ({getProviderTemplate(inst.providerId)?.name || inst.providerId})
-                  </option>
-                ))}
+                <optgroup label={API_INSTANCE_SOURCE_LABELS.platform}>
+                  {groupedAvailableInstances.platform.map((inst) => (
+                    <option key={inst.id} value={inst.id}>
+                      {inst.name} ({getProviderTemplate(inst.providerId)?.name || inst.providerId})
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label={API_INSTANCE_SOURCE_LABELS.custom}>
+                  {groupedAvailableInstances.custom.map((inst) => (
+                    <option key={inst.id} value={inst.id}>
+                      {inst.name} ({getProviderTemplate(inst.providerId)?.name || inst.providerId})
+                    </option>
+                  ))}
+                </optgroup>
               </>
             )}
             {field.key === 'model' && (
@@ -596,12 +655,23 @@ export function PropertiesPanel() {
                 </div>
                 {assetLibraryNotice && <div className="text-[10px] text-emerald-300">{assetLibraryNotice}</div>}
                 {assetLibraryError && <div className="text-[10px] text-red-300">{assetLibraryError}</div>}
+                {addableRunAssetIds.length > 1 && (
+                  <button
+                    onClick={() => void handleAddAllRunAssetsToCollection()}
+                    disabled={!selectedAssetCollection || newRunAssetIds.length === 0}
+                    className="flex w-full items-center justify-center gap-1.5 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-1.5 text-[10px] text-emerald-200 transition-colors hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:border-panel-border disabled:bg-panel-bg disabled:text-gray-600"
+                  >
+                    <ImagePlus className="h-3 w-3" />
+                    {newRunAssetIds.length === 0 ? '全部已在集合中' : `加入全部 ${newRunAssetIds.length} 个产物`}
+                  </button>
+                )}
               </div>
             )}
             {lastRun.assets.length > 0 && (
               <div className="grid grid-cols-4 gap-1.5">
                 {lastRun.assets.slice(0, 8).map((asset, index) => {
-                  const canAdd = Boolean(asset.id && selectedAssetCollection);
+                  const alreadyInCollection = selectedAssetCollection ? collectionHasAsset(selectedAssetCollection, asset.id || '') : false;
+                  const canAdd = Boolean(asset.id && selectedAssetCollection && !alreadyInCollection);
                   return (
                     <div key={`${asset.url}-${index}`} className="group/asset relative overflow-hidden rounded-md border border-panel-border bg-panel-bg">
                       {asset.type === 'image' ? (
@@ -623,10 +693,10 @@ export function PropertiesPanel() {
                           onClick={() => void handleAddRunAssetToCollection(asset)}
                           disabled={!canAdd}
                           className="absolute inset-x-1 bottom-1 flex items-center justify-center gap-1 rounded bg-black/75 px-1.5 py-1 text-[9px] text-white opacity-0 backdrop-blur transition-opacity hover:bg-accent disabled:cursor-not-allowed disabled:opacity-0 group-hover/asset:opacity-100"
-                          title={canAdd ? '加入素材集合' : '请先创建素材集合'}
+                          title={alreadyInCollection ? '已在当前素材集合中' : canAdd ? '加入素材集合' : '请先创建素材集合'}
                         >
                           <ImagePlus className="h-3 w-3" />
-                          加入
+                          {alreadyInCollection ? '已在集合' : '加入'}
                         </button>
                       )}
                     </div>

@@ -1,13 +1,5 @@
 const { randomUUID } = require('crypto');
 const {
-  addTaskLog,
-  createTask,
-  getTask,
-  insertAsset,
-  linkTaskAsset,
-  updateTask,
-} = require('../db.cjs');
-const {
   filterImageBodyByCapabilities,
   getModelCapabilities,
 } = require('../modelCapabilities.cjs');
@@ -24,9 +16,11 @@ const {
 const { fetchPublicUrl } = require('./networkGuard.cjs');
 const { getImageProviderAdapter } = require('./imageProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
+const { assetRepository: defaultAssetRepository } = require('../repositories/assetRepository.cjs');
+const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
 
-function createImageTask(userId, body, status = 'queued') {
-  return createTask({
+function createImageTask(userId, body, status = 'queued', taskRepository = defaultTaskRepository) {
+  return taskRepository.createTask({
     id: randomUUID(),
     userId,
     nodeType: 'image',
@@ -65,8 +59,8 @@ function createImageTask(userId, body, status = 'queued') {
   });
 }
 
-function taskWasCancelled(taskId) {
-  return getTask(taskId)?.status === 'cancelled';
+function taskWasCancelled(taskId, taskRepository = defaultTaskRepository) {
+  return taskRepository.getTask(taskId)?.status === 'cancelled';
 }
 
 function normalizeImageBodyAliases(body) {
@@ -109,7 +103,17 @@ async function resolveGeneratedImagePayload(item, index) {
   return { buffer, index, mime };
 }
 
-async function saveGeneratedImage({ assetStorage, userId, taskId, payload, prompt, model, providerId }) {
+async function saveGeneratedImage({
+  assetRepository,
+  assetStorage,
+  userId,
+  taskId,
+  payload,
+  prompt,
+  model,
+  providerId,
+  taskRepository,
+}) {
   const stored = await assetStorage.save(payload.buffer, {
     index: payload.index,
     type: 'image',
@@ -119,11 +123,11 @@ async function saveGeneratedImage({ assetStorage, userId, taskId, payload, promp
     providerId,
   });
 
-  const asset = insertAsset({
+  const asset = assetRepository.insertAsset({
     ...stored,
     userId,
   });
-  linkTaskAsset(taskId, asset.id);
+  taskRepository.linkTaskAsset(taskId, asset.id);
   return asset;
 }
 
@@ -133,6 +137,8 @@ function createImageGenerationService({
   proxyRequest,
   publicAsset,
   resolveApiCredentials,
+  assetRepository = defaultAssetRepository,
+  taskRepository = defaultTaskRepository,
   uploadLimits = {},
 }) {
   async function runImageTask({ req, userId, body = {}, secrets, task }) {
@@ -140,7 +146,7 @@ function createImageGenerationService({
     const activeTask = task || createImageTask(userId, {
       ...body,
       publicBaseUrl: body.publicBaseUrl || getPublicBaseUrl(req),
-    }, 'running');
+    }, 'running', taskRepository);
     const taskBody = {
       ...(activeTask.input || {}),
       ...body,
@@ -149,8 +155,8 @@ function createImageGenerationService({
     const workerReq = req || { headers: {}, publicBaseUrl: taskBody.publicBaseUrl };
 
     try {
-      if (taskWasCancelled(activeTask.id)) {
-        addTaskLog(activeTask.id, {
+      if (taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.addTaskLog(activeTask.id, {
           level: 'warn',
           event: 'cancelled_before_start',
           message: 'Task was cancelled before the image worker started.',
@@ -161,7 +167,7 @@ function createImageGenerationService({
       const { baseUrl, apiKey, providerId } = await resolveApiCredentials({ userId, body: taskBody, secrets });
 
       if (!baseUrl) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'Base URL is required' },
           durationMs: Date.now() - startedAt,
@@ -169,7 +175,7 @@ function createImageGenerationService({
         return { status: 400, data: { error: 'Base URL is required' } };
       }
       if (!apiKey) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'API key is required' },
           durationMs: Date.now() - startedAt,
@@ -193,7 +199,7 @@ function createImageGenerationService({
       const capabilityResult = filterImageBodyByCapabilities(normalizedImageBody, capabilities);
 
       if (!capabilityResult.ok) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
           durationMs: Date.now() - startedAt,
@@ -223,7 +229,7 @@ function createImageGenerationService({
           statusText: result.statusText,
           error: upstreamError,
         });
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: upstreamError,
           durationMs: Date.now() - startedAt,
@@ -236,8 +242,8 @@ function createImageGenerationService({
       const saved = [];
 
       for (let i = 0; i < items.length; i += 1) {
-        if (taskWasCancelled(activeTask.id)) {
-          addTaskLog(activeTask.id, {
+        if (taskWasCancelled(activeTask.id, taskRepository)) {
+          taskRepository.addTaskLog(activeTask.id, {
             level: 'warn',
             event: 'cancelled_after_upstream',
             message: 'Image upstream request finished after cancellation; output was not written.',
@@ -250,7 +256,7 @@ function createImageGenerationService({
       }
 
       if (payloads.length === 0) {
-        updateTask(activeTask.id, {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: { message: 'No downloadable image payload found' },
           durationMs: Date.now() - startedAt,
@@ -259,12 +265,12 @@ function createImageGenerationService({
       }
 
       const totalSizeBytes = payloads.reduce((sum, payload) => sum + payload.buffer.length, 0);
-      const limitError = assertAssetStorageQuota({ userId, sizeBytes: totalSizeBytes, uploadLimits });
+      const limitError = assertAssetStorageQuota({ userId, sizeBytes: totalSizeBytes, uploadLimits, assetRepository });
       if (limitError) throw toExposedQuotaError(limitError);
 
       for (const payload of payloads) {
-        if (taskWasCancelled(activeTask.id)) {
-          addTaskLog(activeTask.id, {
+        if (taskWasCancelled(activeTask.id, taskRepository)) {
+          taskRepository.addTaskLog(activeTask.id, {
             level: 'warn',
             event: 'cancelled_after_upstream',
             message: 'Image upstream request finished after cancellation; output was not written.',
@@ -273,6 +279,7 @@ function createImageGenerationService({
         }
 
         const asset = await saveGeneratedImage({
+          assetRepository,
           assetStorage,
           userId,
           taskId: activeTask.id,
@@ -280,16 +287,17 @@ function createImageGenerationService({
           prompt: capabilityResult.body.prompt,
           model: capabilityResult.body.model,
           providerId,
+          taskRepository,
         });
         if (asset) saved.push(asset);
       }
 
       const output = saved.map(publicAsset);
-      if (taskWasCancelled(activeTask.id)) {
+      if (taskWasCancelled(activeTask.id, taskRepository)) {
         return { status: 409, data: { error: 'Task was cancelled.' } };
       }
 
-      updateTask(activeTask.id, {
+      taskRepository.updateTask(activeTask.id, {
         status: 'succeeded',
         output,
         error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
@@ -307,8 +315,8 @@ function createImageGenerationService({
       };
     } catch (error) {
       console.error('/api/images task error:', error);
-      if (activeTask && !taskWasCancelled(activeTask.id)) {
-        updateTask(activeTask.id, {
+      if (activeTask && !taskWasCancelled(activeTask.id, taskRepository)) {
+        taskRepository.updateTask(activeTask.id, {
           status: 'failed',
           error: safeTaskError(error, 'Image generation failed.'),
           durationMs: Date.now() - startedAt,
@@ -330,12 +338,13 @@ function createImageGenerationService({
       task: createImageTask(userId, {
         ...body,
         publicBaseUrl: getPublicBaseUrl(req),
-      }, 'running'),
+      }, 'running', taskRepository),
     });
   }
 
   return {
-    createImageTask,
+    createImageTask: (userId, body, status = 'queued') =>
+      createImageTask(userId, body, status, taskRepository),
     generateImage,
     runImageTask,
   };

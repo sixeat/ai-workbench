@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Check, Clock, Copy, Download, FileJson, FileText, FolderOpen, HardDrive, Layers, Plus, Search, Trash2, Upload, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { summarizeWorkflowVersionDiff } from '../../lib/workflowVersionDiff';
+import { formatWorkflowPageSummary, workflowStorageWarning } from '../../lib/workflowStorageDisplay';
 import {
   deleteWorkflow,
   duplicateWorkflow,
@@ -12,9 +13,11 @@ import {
   saveWorkflow,
   type WorkflowMutationResult,
   type WorkflowProject,
+  type WorkflowStorageLocation,
   type WorkflowVersion,
 } from '../../stores/workflowDb';
 import { useCanvasStore } from '../../stores/canvasStore';
+import { FloatingWindow } from '../layout/FloatingWindow';
 
 interface WorkflowManagerPanelProps {
   isOpen: boolean;
@@ -61,6 +64,7 @@ export function WorkflowManagerPanel({
   const [activeTab, setActiveTab] = useState<'library' | 'import-export'>('library');
   const [workflows, setWorkflows] = useState<WorkflowProject[]>([]);
   const [workflowTotal, setWorkflowTotal] = useState(0);
+  const [workflowStorage, setWorkflowStorage] = useState<WorkflowStorageLocation>('remote');
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -87,6 +91,7 @@ export function WorkflowManagerPanel({
       });
       setWorkflows(page.workflows);
       setWorkflowTotal(page.total);
+      setWorkflowStorage(page.storage);
     } catch (err) {
       setError(err instanceof Error ? err.message : '工作流加载失败');
     } finally {
@@ -105,6 +110,7 @@ export function WorkflowManagerPanel({
       });
       setWorkflows((current) => mergeWorkflowPages(current, page.workflows));
       setWorkflowTotal(page.total);
+      setWorkflowStorage(page.storage);
     } catch (err) {
       setError(err instanceof Error ? err.message : '更多工作流加载失败');
     } finally {
@@ -123,9 +129,13 @@ export function WorkflowManagerPanel({
   }, [notice]);
 
   const hasMoreWorkflows = workflows.length < workflowTotal;
-  const workflowSummary = searchQuery.trim()
-    ? `${workflows.length}/${workflowTotal} 个匹配`
-    : `已加载 ${workflows.length}/${workflowTotal} 个`;
+  const workflowSummary = formatWorkflowPageSummary({
+    loaded: workflows.length,
+    total: workflowTotal,
+    search: searchQuery,
+    storage: workflowStorage,
+  });
+  const storageWarning = workflowStorageWarning(workflowStorage);
 
   const workflowSaveNotice = (result: WorkflowMutationResult, action = '保存'): string => {
     if (result.storage === 'local') return `后端暂时不可用，已${action}到本地浏览器。恢复连接后建议重新保存到后端。`;
@@ -323,9 +333,8 @@ export function WorkflowManagerPanel({
   if (!isOpen) return null;
 
   return (
-    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="flex h-[80vh] w-[760px] flex-col overflow-hidden rounded-xl border border-panel-border bg-panel-bg shadow-2xl">
-        <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
+    <FloatingWindow contentClassName="h-[80vh] w-[760px] flex-col">
+        <div className="floating-window-header">
           <div className="flex items-center gap-2">
             <FolderOpen className="h-4 w-4 text-accent" />
             <h2 className="text-sm font-semibold text-white">工作流管理</h2>
@@ -346,6 +355,7 @@ export function WorkflowManagerPanel({
         </div>
 
         {error && <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-xs text-red-300">{error}</div>}
+        {storageWarning && <div className="border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">{storageWarning}</div>}
 
         <div className="min-h-0 flex-1 overflow-hidden">
           {activeTab === 'library' ? (
@@ -438,7 +448,7 @@ export function WorkflowManagerPanel({
                           </div>
 
                           {expandedVersionsId === workflow.id && (
-                            <div className="ml-12 mt-2 rounded-lg border border-panel-border bg-panel-bg/70 p-2">
+                            <div className="ml-12 mt-2 rounded-lg border border-panel-border bg-panel-bg p-2">
                               {versionsLoadingId === workflow.id ? (
                                 <div className="py-3 text-center text-[11px] text-gray-500">加载版本中...</div>
                               ) : versions.length === 0 ? (
@@ -525,8 +535,7 @@ export function WorkflowManagerPanel({
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </FloatingWindow>
   );
 }
 

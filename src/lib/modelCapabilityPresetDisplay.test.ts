@@ -58,6 +58,9 @@ test('summarizeModelCapabilityPresetPreview keeps advanced model limits visible'
   });
 
   assert.ok(rows.length > 12);
+  assert.equal(rows.find((row) => row.label === '视频参考图')?.value, '支持，最多 4 张');
+  assert.equal(rows.find((row) => row.label === '视频参考视频')?.value, '支持，未声明上限');
+  assert.equal(rows.find((row) => row.label === '视频参考音频')?.value, '支持，未声明上限');
   assert.equal(rows.find((row) => row.label === '视频任务类型')?.value, 'text2video / image2video');
   assert.equal(rows.find((row) => row.label === '视频媒体类型')?.value, 'image / video / audio');
 });

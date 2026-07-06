@@ -1,7 +1,9 @@
-import { Bot, ChevronDown, Sparkles } from 'lucide-react';
+import { Bot, ChevronDown, Cloud, Key, Sparkles } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { API_INSTANCE_SOURCE_LABELS, groupApiInstancesBySource } from '../../lib/apiInstanceDisplay';
 import type { ModelCapabilityBadge } from '../../lib/modelCapabilities';
 import type { ApiInstance } from '../../types/api';
+import type { ReactNode } from 'react';
 
 interface NodeModelSelectorProps {
   selectedInstance: ApiInstance | null;
@@ -32,6 +34,8 @@ export function NodeModelSelector({
   onSelectInstance,
   onSelectModel,
 }: NodeModelSelectorProps) {
+  const groupedInstances = groupApiInstancesBySource(availableInstances);
+
   return (
     <div className="px-3 pb-2.5">
       <div className="flex items-center gap-1.5">
@@ -49,26 +53,26 @@ export function NodeModelSelector({
           </button>
 
           {showInstanceSelect && (
-            <div className="absolute bottom-full left-0 z-50 mb-1 max-h-[160px] w-full overflow-auto rounded-lg border border-panel-border bg-panel-bg shadow-xl">
+            <div className="absolute bottom-full left-0 z-50 mb-1 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-panel-border bg-panel-bg p-2 shadow-xl">
               {availableInstances.length === 0 ? (
                 <div className="px-2 py-2 text-center text-[10px] text-gray-500">暂无可用 API 实例</div>
               ) : (
-                availableInstances.map((instance) => (
-                  <button
-                    key={instance.id}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onSelectInstance(instance.id);
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-1.5 px-2 py-1.5 text-left text-[10px] text-gray-300 hover:bg-gray-700/50',
-                      instance.id === selectedInstanceId && 'bg-accent/10 text-accent'
-                    )}
-                  >
-                    <Bot className="h-3 w-3 shrink-0" />
-                    <span className="truncate">{instance.name}</span>
-                  </button>
-                ))
+                <div className="grid max-h-[220px] grid-cols-2 gap-2 overflow-auto">
+                  <ApiInstanceColumn
+                    icon={<Cloud className="h-3 w-3" />}
+                    instances={groupedInstances.platform}
+                    selectedInstanceId={selectedInstanceId}
+                    title={API_INSTANCE_SOURCE_LABELS.platform}
+                    onSelectInstance={onSelectInstance}
+                  />
+                  <ApiInstanceColumn
+                    icon={<Key className="h-3 w-3" />}
+                    instances={groupedInstances.custom}
+                    selectedInstanceId={selectedInstanceId}
+                    title={API_INSTANCE_SOURCE_LABELS.custom}
+                    onSelectInstance={onSelectInstance}
+                  />
+                </div>
               )}
             </div>
           )}
@@ -141,6 +145,51 @@ export function NodeModelSelector({
             >
               {item.label}
             </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ApiInstanceColumn({
+  icon,
+  instances,
+  onSelectInstance,
+  selectedInstanceId,
+  title,
+}: {
+  icon: ReactNode;
+  instances: ApiInstance[];
+  onSelectInstance: (instanceId: string) => void;
+  selectedInstanceId?: string;
+  title: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-panel-border bg-canvas-bg/40 p-1.5">
+      <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium text-gray-400">
+        {icon}
+        <span className="truncate">{title}</span>
+      </div>
+      {instances.length === 0 ? (
+        <div className="px-1 py-2 text-[10px] text-gray-600">暂无可用 API</div>
+      ) : (
+        <div className="space-y-1">
+          {instances.map((instance) => (
+            <button
+              key={instance.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectInstance(instance.id);
+              }}
+              className={cn(
+                'flex w-full items-center gap-1.5 rounded px-1.5 py-1.5 text-left text-[10px] text-gray-300 hover:bg-gray-700/50',
+                instance.id === selectedInstanceId && 'bg-accent/10 text-accent'
+              )}
+            >
+              <Bot className="h-3 w-3 shrink-0" />
+              <span className="truncate">{instance.name}</span>
+            </button>
           ))}
         </div>
       )}

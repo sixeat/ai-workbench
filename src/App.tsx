@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { AlertCircle, CheckCircle2, Loader2, LockKeyhole, Mail, RefreshCw, ShieldCheck, UserPlus } from 'lucide-react';
+import { AlertCircle, Boxes, CheckCircle2, KeyRound, LayoutPanelLeft, Loader2, LockKeyhole, Mail, RefreshCw, ShieldCheck, SlidersHorizontal, UserPlus, Workflow, Zap } from 'lucide-react';
 import { FlowCanvas } from './components/canvas/FlowCanvas';
 import { Header } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
@@ -12,14 +12,17 @@ import {
   proxyAuthMe,
   proxyLogin,
   proxyLogout,
+  proxyRequestPasswordReset,
   proxyRequestRegistration,
+  proxyVerifyPasswordReset,
   proxyVerifyRegistration,
   type ProxyAuthMe,
   type ProxyRegistrationPolicy,
 } from './lib/apiProxy';
+import { preserveLoginFormSnapshot, resolveLoginSubmission } from './lib/authFormState';
 import { cn } from './lib/utils';
 import { useCanvasStore } from './stores/canvasStore';
-import type { WorkflowProject } from './stores/workflowDb';
+import { setWorkflowStorageMode, type WorkflowProject } from './stores/workflowDb';
 
 const AccountSecurityPanel = lazy(() =>
   import('./components/panels/AccountSecurityPanel').then((module) => ({ default: module.AccountSecurityPanel }))
@@ -46,11 +49,24 @@ const WorkflowManagerPanel = lazy(() =>
   import('./components/panels/WorkflowManagerPanel').then((module) => ({ default: module.WorkflowManagerPanel }))
 );
 
-type AuthMode = 'login' | 'register' | 'verify';
+type AuthMode = 'login' | 'register' | 'verify' | 'reset' | 'resetVerify';
+const REGISTRATION_RESEND_SECONDS = 60;
+
+function formatAuthError(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : fallback;
+  if (/Invalid email or password/i.test(message)) return '这个邮箱还没有注册，或密码不正确。你可以先注册账号，或检查密码后再登录。';
+  if (/Email and password are required/i.test(message)) return '请输入邮箱和密码。';
+  if (/Too many login requests/i.test(message)) return '登录尝试太频繁了，请稍后再试。';
+  return message || fallback;
+}
+
+function isLoginCredentialError(message: string): boolean {
+  return /邮箱还没有注册|密码不正确/.test(message);
+}
 
 interface AuthGateProps {
   authInfo: ProxyAuthMe;
-  onSuccess: () => Promise<void>;
+  onSuccess: () => Promise<ProxyAuthMe | null>;
 }
 
 function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
@@ -60,35 +76,76 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
   const [name, setName] = useState('');
   const [invitationCode, setInvitationCode] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
+  const [sentEmail, setSentEmail] = useState('');
+  const [verificationExpiresAt, setVerificationExpiresAt] = useState('');
+  const [resendAvailableAt, setResendAvailableAt] = useState(0);
+  const [nowMs, setNowMs] = useState(Date.now());
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const registration = authInfo.registration;
   const canRegister = Boolean(registration?.allowPublicRegistration || registration?.requireInvitationCode);
+  const resendSeconds = Math.max(0, Math.ceil((resendAvailableAt - nowMs) / 1000));
+  const verificationEmail = sentEmail || email.trim();
+  const currentOrigin = typeof window === 'undefined' ? '当前访问地址' : window.location.origin;
+  const verificationExpiry = verificationExpiresAt
+    ? new Date(verificationExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : '';
+
+  useEffect(() => {
+    if (!resendAvailableAt) return undefined;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [resendAvailableAt]);
+
+  const confirmCookieSignIn = async (fallbackMessage: string) => {
+    const nextAuth = await onSuccess();
+    if (!nextAuth || (nextAuth.requireLogin && !nextAuth.authenticated)) {
+      throw new Error(`${fallbackMessage}请确认正在访问 ${currentOrigin}，并刷新页面后重试。`);
+    }
+  };
 
   const submitLogin = async (event: React.FormEvent) => {
     event.preventDefault();
+    const formData = new FormData(event.currentTarget as HTMLFormElement);
+    const submitted = preserveLoginFormSnapshot(resolveLoginSubmission(
+      { email, password },
+      {
+        email: String(formData.get('email') || ''),
+        password: String(formData.get('password') || ''),
+      }
+    ));
     setLoading(true);
     setError('');
+    setEmail(submitted.email);
+    setPassword(submitted.password);
     try {
-      await proxyLogin(email.trim(), password);
-      await onSuccess();
+      await proxyLogin(submitted.email.trim(), submitted.password);
+      await confirmCookieSignIn('登录请求已成功，但浏览器没有保存登录态。');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '登录失败，请检查邮箱和密码。');
+      setEmail(submitted.email);
+      setPassword(submitted.password);
+      setError(formatAuthError(err, '登录失败，请检查邮箱和密码。'));
     } finally {
       setLoading(false);
     }
   };
 
-  const submitRegister = async (event: React.FormEvent) => {
-    event.preventDefault();
+  const requestRegistrationCode = async () => {
     setLoading(true);
     setError('');
     setNotice('');
     try {
       const data = await proxyRequestRegistration(email.trim(), password, name.trim(), invitationCode.trim());
       setMode('verify');
-      setNotice(data.delivery?.devCode ? `验证码已生成：${data.delivery.devCode}` : '验证码已发送，请查收邮箱。');
+      setSentEmail(data.email);
+      setEmail(data.email);
+      setVerificationExpiresAt(data.expiresAt);
+      setVerificationCode('');
+      setResendAvailableAt(Date.now() + REGISTRATION_RESEND_SECONDS * 1000);
+      setNotice(data.delivery?.devCode
+        ? `开发验证码：${data.delivery.devCode}`
+        : `验证码已发送到 ${data.email}，请在 ${new Date(data.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 前完成验证。`);
     } catch (err) {
       setError(err instanceof Error ? err.message : '注册请求失败，请稍后再试。');
     } finally {
@@ -96,18 +153,111 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
     }
   };
 
+  const submitRegister = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await requestRegistrationCode();
+  };
+
   const submitVerify = async (event: React.FormEvent) => {
     event.preventDefault();
     setLoading(true);
     setError('');
     try {
-      await proxyVerifyRegistration(email.trim(), verificationCode.trim());
-      await onSuccess();
+      await proxyVerifyRegistration(verificationEmail, verificationCode.trim());
+      await confirmCookieSignIn('注册已完成，但浏览器没有保存登录态。');
     } catch (err) {
       setError(err instanceof Error ? err.message : '验证码验证失败。');
     } finally {
       setLoading(false);
     }
+  };
+
+  const resendRegistrationCode = async () => {
+    if (resendSeconds > 0) return;
+    await requestRegistrationCode();
+  };
+
+  const requestPasswordResetCode = async () => {
+    setLoading(true);
+    setError('');
+    setNotice('');
+    try {
+      const data = await proxyRequestPasswordReset(email.trim());
+      setMode('resetVerify');
+      setSentEmail(data.email);
+      setEmail(data.email);
+      setPassword('');
+      setVerificationExpiresAt(data.expiresAt);
+      setVerificationCode('');
+      setResendAvailableAt(Date.now() + REGISTRATION_RESEND_SECONDS * 1000);
+      setNotice(data.delivery?.devCode
+        ? `开发验证码：${data.delivery.devCode}`
+        : `如果该邮箱已注册，验证码会发送到 ${data.email}。请在 ${new Date(data.expiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} 前完成重置。`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '密码重置请求失败，请稍后再试。');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const submitPasswordResetRequest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    await requestPasswordResetCode();
+  };
+
+  const submitPasswordResetVerify = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setLoading(true);
+    setError('');
+    try {
+      await proxyVerifyPasswordReset(verificationEmail, verificationCode.trim(), password);
+      await confirmCookieSignIn('密码已重置，但浏览器没有保存登录态。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '验证码验证失败，请重新检查。');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const resendPasswordResetCode = async () => {
+    if (resendSeconds > 0) return;
+    await requestPasswordResetCode();
+  };
+
+  const editRegistrationEmail = () => {
+    setMode('register');
+    setSentEmail('');
+    setVerificationCode('');
+    setVerificationExpiresAt('');
+    setResendAvailableAt(0);
+    setNotice('');
+    setError('');
+  };
+
+  const editResetEmail = () => {
+    setMode('reset');
+    setSentEmail('');
+    setVerificationCode('');
+    setVerificationExpiresAt('');
+    setResendAvailableAt(0);
+    setNotice('');
+    setError('');
+  };
+
+  const backToLogin = () => {
+    setMode('login');
+    setSentEmail('');
+    setVerificationCode('');
+    setVerificationExpiresAt('');
+    setResendAvailableAt(0);
+    setNotice('');
+    setError('');
+  };
+
+  const switchToRegister = () => {
+    setMode('register');
+    setError('');
+    setNotice('');
   };
 
   return (
@@ -145,18 +295,25 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
           <div className="p-7">
             <div className="mb-6">
               <h2 className="text-lg font-semibold text-white">
-                {mode === 'login' ? '邮箱登录' : mode === 'register' ? '创建账号' : '验证邮箱'}
+                {mode === 'login' ? '邮箱登录' : mode === 'register' ? '创建账号' : mode === 'reset' ? '重置密码' : mode === 'resetVerify' ? '验证重置' : '验证邮箱'}
               </h2>
               <p className="mt-1 text-xs text-gray-500">
-                {mode === 'login' ? '请输入管理员创建的账号，或使用邀请注册。' : '注册完成后会进入工作台。'}
+                {mode === 'login'
+                  ? '已有账号直接登录；没有账号请先注册。'
+                  : mode === 'reset' || mode === 'resetVerify'
+                    ? '通过邮箱验证码重置密码，完成后会自动登录。'
+                    : '注册完成后会进入工作台。'}
               </p>
             </div>
 
             {mode === 'login' && (
               <form className="space-y-4" onSubmit={submitLogin}>
-                <TextInput icon={<Mail className="h-4 w-4" />} label="邮箱" type="email" value={email} onChange={setEmail} required />
-                <TextInput icon={<LockKeyhole className="h-4 w-4" />} label="密码" type="password" value={password} onChange={setPassword} required />
+                <TextInput autoComplete="email" icon={<Mail className="h-4 w-4" />} label="邮箱" name="email" type="email" value={email} onChange={setEmail} required />
+                <TextInput autoComplete="current-password" icon={<LockKeyhole className="h-4 w-4" />} label="密码" name="password" type="password" value={password} onChange={setPassword} required />
                 <SubmitButton loading={loading}>登录</SubmitButton>
+                <button className="text-xs text-gray-400 hover:text-white" type="button" onClick={() => { setMode('reset'); setPassword(''); setError(''); setNotice(''); }}>
+                  忘记密码？
+                </button>
               </form>
             )}
 
@@ -174,9 +331,100 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
 
             {mode === 'verify' && (
               <form className="space-y-4" onSubmit={submitVerify}>
-                <TextInput label="邮箱" type="email" value={email} onChange={setEmail} required />
-                <TextInput label="验证码" value={verificationCode} onChange={setVerificationCode} required />
+                <TextInput
+                  helperText={verificationExpiry ? `验证码有效期至 ${verificationExpiry}` : '验证码已发送，请查收邮箱。'}
+                  label="邮箱"
+                  type="email"
+                  value={verificationEmail}
+                  onChange={() => undefined}
+                  disabled
+                  required
+                />
+                <TextInput
+                  autoComplete="one-time-code"
+                  helperText="请输入邮件里的 6 位数字验证码。"
+                  inputMode="numeric"
+                  label="验证码"
+                  maxLength={6}
+                  value={verificationCode}
+                  onChange={(value) => setVerificationCode(value.replace(/\D/g, '').slice(0, 6))}
+                  required
+                />
                 <SubmitButton loading={loading}>完成注册</SubmitButton>
+                <div className="flex items-center justify-between text-xs">
+                  <button
+                    className="text-gray-400 hover:text-white"
+                    type="button"
+                    onClick={editRegistrationEmail}
+                  >
+                    换一个邮箱
+                  </button>
+                  <button
+                    className="text-emerald-300 hover:text-emerald-200 disabled:cursor-not-allowed disabled:text-gray-600"
+                    disabled={loading || resendSeconds > 0}
+                    type="button"
+                    onClick={resendRegistrationCode}
+                  >
+                    {resendSeconds > 0 ? `${resendSeconds} 秒后可重发` : '重新发送验证码'}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {mode === 'reset' && (
+              <form className="space-y-4" onSubmit={submitPasswordResetRequest}>
+                <TextInput icon={<Mail className="h-4 w-4" />} label="邮箱" type="email" value={email} onChange={setEmail} required />
+                <SubmitButton loading={loading}>发送重置验证码</SubmitButton>
+              </form>
+            )}
+
+            {mode === 'resetVerify' && (
+              <form className="space-y-4" onSubmit={submitPasswordResetVerify}>
+                <TextInput
+                  helperText={verificationExpiry ? `验证码有效期至 ${verificationExpiry}` : '验证码已发送，请查收邮箱。'}
+                  label="邮箱"
+                  type="email"
+                  value={verificationEmail}
+                  onChange={() => undefined}
+                  disabled
+                  required
+                />
+                <TextInput
+                  autoComplete="one-time-code"
+                  helperText="请输入邮件里的 6 位数字验证码。"
+                  inputMode="numeric"
+                  label="验证码"
+                  maxLength={6}
+                  value={verificationCode}
+                  onChange={(value) => setVerificationCode(value.replace(/\D/g, '').slice(0, 6))}
+                  required
+                />
+                <TextInput
+                  helperText="至少 8 位。"
+                  label="新密码"
+                  type="password"
+                  value={password}
+                  onChange={setPassword}
+                  required
+                />
+                <SubmitButton loading={loading}>重置并登录</SubmitButton>
+                <div className="flex items-center justify-between text-xs">
+                  <button
+                    className="text-gray-400 hover:text-white"
+                    type="button"
+                    onClick={editResetEmail}
+                  >
+                    换一个邮箱
+                  </button>
+                  <button
+                    className="text-emerald-300 hover:text-emerald-200 disabled:cursor-not-allowed disabled:text-gray-600"
+                    disabled={loading || resendSeconds > 0}
+                    type="button"
+                    onClick={resendPasswordResetCode}
+                  >
+                    {resendSeconds > 0 ? `${resendSeconds} 秒后可重发` : '重新发送验证码'}
+                  </button>
+                </div>
               </form>
             )}
 
@@ -189,19 +437,28 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
             {error && (
               <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">
                 {error}
+                {mode === 'login' && canRegister && isLoginCredentialError(error) && (
+                  <button
+                    className="mt-2 block text-emerald-200 underline-offset-4 hover:text-emerald-100 hover:underline"
+                    type="button"
+                    onClick={switchToRegister}
+                  >
+                    去注册这个邮箱
+                  </button>
+                )}
               </div>
             )}
 
             <div className="mt-6 flex items-center justify-between text-xs">
               {mode !== 'login' ? (
-                <button className="text-gray-400 hover:text-white" type="button" onClick={() => setMode('login')}>
+                <button className="text-gray-400 hover:text-white" type="button" onClick={backToLogin}>
                   返回登录
                 </button>
               ) : (
-                <span className="text-gray-600">服务器模式</span>
+                <span className="text-gray-600">服务器模式 · {currentOrigin}</span>
               )}
               {mode === 'login' && canRegister && (
-                <button className="flex items-center gap-1.5 text-emerald-300 hover:text-emerald-200" type="button" onClick={() => setMode('register')}>
+                <button className="flex items-center gap-1.5 text-emerald-300 hover:text-emerald-200" type="button" onClick={switchToRegister}>
                   <UserPlus className="h-3.5 w-3.5" />
                   注册账号
                 </button>
@@ -217,26 +474,51 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
 interface TextInputProps {
   icon?: React.ReactNode;
   label: string;
+  name?: string;
   type?: string;
   value: string;
   required?: boolean;
+  disabled?: boolean;
+  helperText?: string;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
+  maxLength?: number;
+  autoComplete?: string;
   onChange: (value: string) => void;
 }
 
-function TextInput({ icon, label, type = 'text', value, required, onChange }: TextInputProps) {
+function TextInput({
+  autoComplete,
+  disabled,
+  helperText,
+  icon,
+  inputMode,
+  label,
+  maxLength,
+  name,
+  type = 'text',
+  value,
+  required,
+  onChange,
+}: TextInputProps) {
   return (
     <label className="block">
       <span className="mb-1.5 block text-xs font-medium text-gray-400">{label}</span>
-      <span className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2.5 text-sm text-white focus-within:border-emerald-400/70">
+      <span className="flex items-center gap-2 rounded-xl border border-[#27313d] bg-[#151a20] px-3 py-2.5 text-sm text-white focus-within:border-emerald-400/70">
         {icon && <span className="text-gray-500">{icon}</span>}
         <input
-          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-gray-600"
+          autoComplete={autoComplete}
+          className="min-w-0 flex-1 bg-transparent outline-none placeholder:text-gray-600 disabled:text-gray-500"
+          disabled={disabled}
+          inputMode={inputMode}
+          maxLength={maxLength}
+          name={name}
           type={type}
           value={value}
           required={required}
           onChange={(event) => onChange(event.target.value)}
         />
       </span>
+      {helperText && <span className="mt-1.5 block text-xs text-gray-500">{helperText}</span>}
     </label>
   );
 }
@@ -286,8 +568,8 @@ function ConnectionError({ message, onRetry }: { message: string; onRetry: () =>
 
 function PanelLoading() {
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
-      <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-[#121820]/95 px-5 py-4 text-sm text-gray-200 shadow-2xl">
+    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#06090d]">
+      <div className="flex items-center gap-3 rounded-xl border border-[#27313d] bg-[#151a20] px-5 py-4 text-sm text-gray-200 shadow-2xl">
         <Loader2 className="h-4 w-4 animate-spin text-emerald-300" />
         正在加载面板...
       </div>
@@ -318,16 +600,19 @@ function App() {
   const [currentWorkflowName, setCurrentWorkflowName] = useState('未命名工作流');
   const { nodes, edges, clearCanvas, setEdges, setNodes } = useCanvasStore();
 
-  const refreshAuth = useCallback(async () => {
-    setAuthLoading(true);
+  const refreshAuth = useCallback(async (showLoading = true) => {
+    if (showLoading) setAuthLoading(true);
     setAuthError('');
     try {
       const data = await proxyAuthMe();
       setAuthInfo(data);
+      setWorkflowStorageMode(data.deploymentMode);
+      return data;
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : '后端服务没有响应。');
+      return null;
     } finally {
-      setAuthLoading(false);
+      if (showLoading) setAuthLoading(false);
     }
   }, []);
 
@@ -390,53 +675,65 @@ function App() {
   };
 
   if (authLoading) return <LoadingScreen />;
-  if (authError) return <ConnectionError message={authError} onRetry={refreshAuth} />;
+  if (authError) {
+    return <ConnectionError message={authError} onRetry={() => { void refreshAuth(); }} />;
+  }
   if (authInfo?.requireLogin && !authInfo.authenticated) {
-    return <AuthGate authInfo={registrationPolicyAllowsGate(authInfo) ? authInfo : { ...authInfo, registration: { allowPublicRegistration: false, requireInvitationCode: false } }} onSuccess={refreshAuth} />;
+    return <AuthGate authInfo={registrationPolicyAllowsGate(authInfo) ? authInfo : { ...authInfo, registration: { allowPublicRegistration: false, requireInvitationCode: false } }} onSuccess={() => refreshAuth(false)} />;
   }
 
   return (
-    <main className="flex h-screen min-h-0 flex-col overflow-hidden bg-canvas-bg text-gray-100">
-      <Header
-        onToggleApiManager={() => openApiManager('server')}
-        onToggleAgentPanel={() => setIsAgentPanelOpen(true)}
-        onToggleLogs={() => setIsLogsOpen(true)}
-        onToggleWorkflowManager={() => setIsWorkflowManagerOpen(true)}
-        onToggleTaskHistory={() => setIsTaskHistoryOpen(true)}
-        onToggleAssetLibrary={() => setIsAssetLibraryOpen(true)}
-        onToggleAdminUsers={() => setIsAdminUsersOpen(true)}
-        onToggleAccountSecurity={() => setIsAccountSecurityOpen(true)}
-        currentUser={authInfo?.user}
-        deploymentMode={authInfo?.deploymentMode}
-        onLogout={authInfo?.authenticated ? handleLogout : undefined}
+    <main className="workbench-shell text-gray-100">
+      <WorkbenchRail
+        canOpenAdminConsole={authInfo?.user?.role === 'admin'}
+        onOpenAdminConsole={() => setIsAdminUsersOpen(true)}
+        onOpenApiManager={() => openApiManager('server')}
+        onOpenAssetLibrary={() => setIsAssetLibraryOpen(true)}
+        onOpenWorkflowManager={() => setIsWorkflowManagerOpen(true)}
       />
 
-      <Workspace className="min-h-0">
-        <Sidebar
-          position="left"
-          width={280}
-          collapsed={leftCollapsed}
-          onToggle={() => setLeftCollapsed((value) => !value)}
-          title="节点"
-        >
-          <NodeListPanel />
-        </Sidebar>
+      <div className="workspace-frame">
+        <Header
+          onToggleAgentPanel={() => setIsAgentPanelOpen(true)}
+          onToggleLogs={() => setIsLogsOpen(true)}
+          onToggleWorkflowManager={() => setIsWorkflowManagerOpen(true)}
+          onToggleTaskHistory={() => setIsTaskHistoryOpen(true)}
+          onToggleAssetLibrary={() => setIsAssetLibraryOpen(true)}
+          onToggleAccountSecurity={() => setIsAccountSecurityOpen(true)}
+          currentWorkflowName={currentWorkflowName}
+          currentUser={authInfo?.user}
+          deploymentMode={authInfo?.deploymentMode}
+          onLogout={authInfo?.authenticated ? handleLogout : undefined}
+        />
 
-        <Panel className="min-w-0">
-          <FlowCanvas />
-        </Panel>
+        <Workspace className="main-grid">
+          <Sidebar
+            position="left"
+            width={292}
+            collapsed={leftCollapsed}
+            onToggle={() => setLeftCollapsed((value) => !value)}
+            title="画布"
+            className="left-panel"
+          >
+            <NodeListPanel currentWorkflowName={currentWorkflowName} />
+          </Sidebar>
 
-        <Sidebar
-          position="right"
-          width={340}
-          collapsed={rightCollapsed}
-          onToggle={() => setRightCollapsed((value) => !value)}
-          title="属性"
-          className={cn(rightCollapsed && 'border-l')}
-        >
-          <PropertiesPanel />
-        </Sidebar>
-      </Workspace>
+          <Panel className="min-w-0">
+            <FlowCanvas />
+          </Panel>
+
+          <Sidebar
+            position="right"
+            width={286}
+            collapsed={rightCollapsed}
+            onToggle={() => setRightCollapsed((value) => !value)}
+            title="属性"
+            className={cn('right-panel')}
+          >
+            <PropertiesPanel />
+          </Sidebar>
+        </Workspace>
+      </div>
 
       <Suspense fallback={<PanelLoading />}>
         {isWorkflowManagerOpen && (
@@ -459,7 +756,7 @@ function App() {
             isOpen={isAccountSecurityOpen}
             currentUser={authInfo?.user}
             onClose={() => setIsAccountSecurityOpen(false)}
-            onSessionInvalidated={refreshAuth}
+            onSessionInvalidated={async () => { await refreshAuth(); }}
           />
         )}
         {isAdminUsersOpen && (
@@ -479,3 +776,46 @@ function App() {
 }
 
 export default App;
+
+function WorkbenchRail({
+  canOpenAdminConsole,
+  onOpenAdminConsole,
+  onOpenApiManager,
+  onOpenAssetLibrary,
+  onOpenWorkflowManager,
+}: {
+  canOpenAdminConsole: boolean;
+  onOpenAdminConsole: () => void;
+  onOpenApiManager: () => void;
+  onOpenAssetLibrary: () => void;
+  onOpenWorkflowManager: () => void;
+}) {
+  return (
+    <aside className="rail">
+      <div className="brand-mark">
+        <Zap className="h-5 w-5" />
+      </div>
+      <button className="rail-button active" type="button" title="工作流" onClick={onOpenWorkflowManager}>
+        <Workflow className="h-5 w-5" />
+      </button>
+      <button className="rail-button" type="button" title="画布">
+        <LayoutPanelLeft className="h-5 w-5" />
+      </button>
+      <button className="rail-button" type="button" title="素材库" onClick={onOpenAssetLibrary}>
+        <Boxes className="h-5 w-5" />
+      </button>
+      <button className="rail-button" type="button" title="API 管理" onClick={onOpenApiManager}>
+        <KeyRound className="h-5 w-5" />
+      </button>
+      <div className="rail-spacer" />
+      {canOpenAdminConsole && (
+        <button className="rail-button" type="button" title="管理端" onClick={onOpenAdminConsole}>
+          <ShieldCheck className="h-5 w-5" />
+        </button>
+      )}
+      <button className="rail-button" type="button" title="设置">
+        <SlidersHorizontal className="h-5 w-5" />
+      </button>
+    </aside>
+  );
+}

@@ -14,6 +14,7 @@ const {
   createUser,
   db,
   getTask,
+  listTaskAssets,
   listTaskLogs,
 } = require('./db.cjs');
 const { LocalAssetStorage } = require('./assetStorage.cjs');
@@ -73,10 +74,115 @@ function waitFor(predicate, timeoutMs = 1000) {
   });
 }
 
+function createDeferred() {
+  let resolve;
+  let reject;
+  const promise = new Promise((promiseResolve, promiseReject) => {
+    resolve = promiseResolve;
+    reject = promiseReject;
+  });
+  return { promise, reject, resolve };
+}
+
 test.after(() => {
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
   delete process.env.WORKBENCH_ALLOW_PRIVATE_MEDIA_FETCH;
+});
+
+test('model proxy routes can enqueue text tasks without starting a worker', async () => {
+  const user = createUser({
+    email: 'api-only-text@example.com',
+    username: 'api-only-text@example.com',
+    name: 'API Only Text',
+    passwordHash: 'test',
+  });
+  const app = createFakeApp();
+  const upstreamRequests = [];
+  const handlers = registerModelProxyRoutes(app, {
+    autoStartQueue: false,
+    enableGenericProxy: false,
+    joinUrl,
+    proxyAllowlist: [],
+    proxyRequest: async (url, options) => {
+      upstreamRequests.push({ url, body: options.body });
+      return { status: 200, data: { choices: [{ message: { content: 'should not run' } }] } };
+    },
+    getRequestUserId: () => user.id,
+    readSecrets: async () => ({}),
+    resolveApiCredentials: async () => ({ baseUrl: 'https://api.example.com', apiKey: 'saved-key', providerId: 'openai-compatible' }),
+    requireAdmin: () => true,
+    resolveDirectCredentials: () => ({ baseUrl: 'https://api.example.com', apiKey: 'direct-key', providerId: 'openai-compatible' }),
+  });
+
+  try {
+    const route = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/chat');
+    const res = createMockRes();
+    await route.handler(createMockReq({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'direct-key',
+      providerId: 'openai-compatible',
+      model: 'gpt-test',
+      messages: [{ role: 'user', content: 'hello from api only' }],
+    }), res);
+
+    assert.equal(res.statusCode, 202);
+    assert.equal(res.body.task.status, 'queued');
+    assert.equal(getTask(res.body.taskId).status, 'queued');
+    assert.deepEqual(upstreamRequests, []);
+    assert.equal(handlers.getTextQueueStats().stopped, false);
+    assert.equal(handlers.getTextQueueStats().scheduled, false);
+  } finally {
+    await handlers.stopTextQueue();
+  }
+});
+
+test('generation routes can enqueue image tasks without starting a worker', async () => {
+  const user = createUser({
+    email: 'api-only-image@example.com',
+    username: 'api-only-image@example.com',
+    name: 'API Only Image',
+    passwordHash: 'test',
+  });
+  const app = createFakeApp();
+  const upstreamRequests = [];
+  const assetStorage = {
+    async save() {
+      throw new Error('asset save should not run in API-only mode');
+    },
+  };
+  const handlers = registerGenerationRoutes(app, {
+    assetStorage,
+    autoStartQueue: false,
+    getRequestUserId: () => user.id,
+    joinUrl,
+    proxyRequest: async (url, options) => {
+      upstreamRequests.push({ url, body: options.body });
+      return { status: 200, data: { data: [] } };
+    },
+    publicAsset: (asset) => asset,
+    readSecrets: async () => ({}),
+    resolveApiCredentials: async () => ({ baseUrl: 'https://api.example.com', apiKey: 'saved-key', providerId: 'openai-compatible' }),
+  });
+
+  try {
+    const route = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/images');
+    const res = createMockRes();
+    await route.handler(createMockReq({
+      providerId: 'openai-compatible',
+      model: 'gpt-image-test',
+      prompt: 'image from api only',
+    }), res);
+
+    assert.equal(res.statusCode, 202);
+    assert.equal(res.body.task.status, 'queued');
+    assert.equal(getTask(res.body.taskId).status, 'queued');
+    assert.deepEqual(upstreamRequests, []);
+    assert.equal(handlers.getGenerationQueueStats().stopped, false);
+    assert.equal(handlers.getGenerationQueueStats().scheduled, false);
+  } finally {
+    await handlers.stopGenerationQueue();
+  }
 });
 
 test('chat route creates a queued text task and worker completes it', async () => {
@@ -332,6 +438,196 @@ test('task cancel route prevents a queued image worker from calling upstream', a
     assert.equal(logs.some((log) => log.event === 'started'), false);
     assert.equal(logs.some((log) => log.event === 'succeeded'), false);
   } finally {
+    await handlers.stopGenerationQueue();
+  }
+});
+
+test('task cancel route keeps a running image task cancelled after upstream returns', async () => {
+  const user = createUser({
+    email: 'running-image-cancel-route@example.com',
+    username: 'running-image-cancel-route@example.com',
+    name: 'Running Image Cancel Route',
+    passwordHash: 'test',
+  });
+  const app = createFakeApp();
+  const upstreamRequests = [];
+  const upstreamStarted = createDeferred();
+  const upstreamResponse = createDeferred();
+  const handlers = registerGenerationRoutes(app, {
+    assetStorage: new LocalAssetStorage(path.join(tempDir, 'outputs-image-running-cancel-route')),
+    getRequestUserId: () => user.id,
+    joinUrl,
+    proxyRequest: async (url, options) => {
+      upstreamRequests.push({ url, options });
+      upstreamStarted.resolve();
+      return upstreamResponse.promise;
+    },
+    publicAsset: (asset) => asset,
+    readSecrets: async () => ({}),
+    resolveApiCredentials: async ({ body }) => ({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'image-key',
+      providerId: body.providerId || 'openai-compatible',
+    }),
+  });
+  const taskService = createTaskService({
+    publicAsset: (asset) => asset,
+  });
+  registerTaskRoutes(app, {
+    getRequestUserId: () => user.id,
+    taskService,
+    retryGenerationTask: async () => {
+      throw new Error('retry should not be called');
+    },
+  });
+
+  try {
+    const imageRoute = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/images');
+    const cancelRoute = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/tasks/:taskId/cancel');
+    const imageRes = createMockRes();
+    await imageRoute.handler(createMockReq({
+      apiKeyId: 'image-key-id',
+      providerId: 'openai-compatible',
+      model: 'gpt-image-1',
+      prompt: 'cancel this while upstream is running',
+      size: '1024x1024',
+      n: 1,
+    }), imageRes);
+
+    await upstreamStarted.promise;
+    await waitFor(() => getTask(imageRes.body.taskId).status === 'running');
+
+    const cancelReq = createMockReq();
+    cancelReq.params = { taskId: imageRes.body.taskId };
+    const cancelRes = createMockRes();
+    cancelRoute.handler(cancelReq, cancelRes);
+
+    upstreamResponse.resolve({
+      status: 200,
+      data: { data: [{ b64_json: Buffer.from('should not be saved').toString('base64') }] },
+    });
+
+    await waitFor(() => {
+      const stats = handlers.getGenerationQueueStats();
+      return !stats.scheduled && stats.activeCount === 0;
+    });
+
+    const task = getTask(imageRes.body.taskId);
+    const logs = listTaskLogs(imageRes.body.taskId);
+    assert.equal(imageRes.statusCode, 202);
+    assert.equal(cancelRes.statusCode, 200);
+    assert.equal(cancelRes.body.task.status, 'cancelled');
+    assert.equal(task.status, 'cancelled');
+    assert.deepEqual(task.output, null);
+    assert.equal(listTaskAssets(task.id).length, 0);
+    assert.equal(upstreamRequests.length, 1);
+    assert.equal(logs.some((log) => log.event === 'started'), true);
+    assert.equal(logs.some((log) => log.event === 'cancel_requested'), true);
+    assert.equal(logs.some((log) => log.event === 'cancelled_after_upstream'), true);
+    assert.equal(logs.some((log) => log.event === 'cancelled'), true);
+    assert.equal(logs.some((log) => log.event === 'succeeded'), false);
+  } finally {
+    upstreamResponse.resolve({
+      status: 200,
+      data: { data: [{ b64_json: Buffer.from('cleanup').toString('base64') }] },
+    });
+    await handlers.stopGenerationQueue();
+  }
+});
+
+test('task cancel route keeps a running video task cancelled after upstream returns', async () => {
+  const user = createUser({
+    email: 'running-video-cancel-route@example.com',
+    username: 'running-video-cancel-route@example.com',
+    name: 'Running Video Cancel Route',
+    passwordHash: 'test',
+  });
+  const app = createFakeApp();
+  const upstreamRequests = [];
+  const upstreamStarted = createDeferred();
+  const upstreamResponse = createDeferred();
+  const handlers = registerGenerationRoutes(app, {
+    assetStorage: new LocalAssetStorage(path.join(tempDir, 'outputs-video-running-cancel-route')),
+    getRequestUserId: () => user.id,
+    joinUrl,
+    proxyRequest: async (url, options) => {
+      upstreamRequests.push({ url, options });
+      upstreamStarted.resolve();
+      return upstreamResponse.promise;
+    },
+    publicAsset: (asset) => asset,
+    readSecrets: async () => ({}),
+    resolveApiCredentials: async () => ({
+      baseUrl: 'https://ark.cn-beijing.volces.com',
+      apiKey: 'video-key',
+      providerId: 'seedance',
+    }),
+  });
+  const taskService = createTaskService({
+    publicAsset: (asset) => asset,
+  });
+  registerTaskRoutes(app, {
+    getRequestUserId: () => user.id,
+    taskService,
+    retryGenerationTask: async () => {
+      throw new Error('retry should not be called');
+    },
+  });
+
+  try {
+    const videoRoute = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/videos');
+    const cancelRoute = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/tasks/:taskId/cancel');
+    const videoRes = createMockRes();
+    await videoRoute.handler(createMockReq({
+      apiKeyId: 'video-key-id',
+      providerId: 'seedance',
+      model: 'doubao-seedance-2-0-mini-260615',
+      prompt: 'cancel this video while upstream is running',
+      duration: 5,
+      ratio: '16:9',
+    }), videoRes);
+
+    await upstreamStarted.promise;
+    await waitFor(() => getTask(videoRes.body.taskId).status === 'running');
+
+    const cancelReq = createMockReq();
+    cancelReq.params = { taskId: videoRes.body.taskId };
+    const cancelRes = createMockRes();
+    cancelRoute.handler(cancelReq, cancelRes);
+
+    upstreamResponse.resolve({
+      status: 200,
+      data: { id: 'upstream-video-after-cancel', status: 'queued' },
+    });
+
+    await waitFor(() => {
+      const stats = handlers.getGenerationQueueStats();
+      return !stats.scheduled && stats.activeCount === 0;
+    });
+
+    const task = getTask(videoRes.body.taskId);
+    const logs = listTaskLogs(videoRes.body.taskId);
+    assert.equal(videoRes.statusCode, 202);
+    assert.equal(cancelRes.statusCode, 200);
+    assert.equal(cancelRes.body.task.status, 'cancelled');
+    assert.equal(task.status, 'cancelled');
+    assert.deepEqual(task.output, null);
+    assert.equal(listTaskAssets(task.id).length, 0);
+    assert.equal(upstreamRequests.length, 1);
+    assert.equal(logs.some((log) => log.event === 'started'), true);
+    assert.equal(logs.some((log) => log.event === 'upstream_video_submitted'), true);
+    assert.equal(logs.some((log) => log.event === 'cancel_requested'), true);
+    assert.equal(logs.some((log) =>
+      log.event === 'cancelled_after_upstream' &&
+      log.data.upstreamTaskId === 'upstream-video-after-cancel'
+    ), true);
+    assert.equal(logs.some((log) => log.event === 'cancelled'), true);
+    assert.equal(logs.some((log) => log.event === 'succeeded'), false);
+  } finally {
+    upstreamResponse.resolve({
+      status: 200,
+      data: { id: 'cleanup-video-task', status: 'queued' },
+    });
     await handlers.stopGenerationQueue();
   }
 });

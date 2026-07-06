@@ -2,6 +2,7 @@ import { X, CheckCircle2, AlertCircle, Loader2, Info, Clock } from 'lucide-react
 import { cn } from '../../lib/utils';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import { formatDuration } from '../../lib/utils';
+import { FloatingWindow } from '../layout/FloatingWindow';
 
 interface ExecutionLogsPanelProps {
   isOpen: boolean;
@@ -28,7 +29,7 @@ export function ExecutionLogsPanel({ isOpen, onClose }: ExecutionLogsPanelProps)
   };
 
   return (
-    <div className="absolute bottom-4 left-4 right-[316px] z-40 bg-panel-bg border border-panel-border rounded-lg shadow-xl overflow-hidden flex flex-col max-h-[300px]">
+    <FloatingWindow placement="bottom-left" contentClassName="max-h-[300px] w-[calc(100vw-396px)] flex-col">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-panel-border bg-canvas-bg">
         <div className="flex items-center gap-2">
@@ -98,6 +99,6 @@ export function ExecutionLogsPanel({ isOpen, onClose }: ExecutionLogsPanelProps)
           </div>
         )}
       </div>
-    </div>
+    </FloatingWindow>
   );
 }

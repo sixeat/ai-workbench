@@ -261,6 +261,47 @@ test('auth session routes list sessions and logout all devices', () => {
   assert.match(logoutRes.headers['set-cookie'], /Max-Age=0/);
 });
 
+test('auth session routes reject anonymous requests without mutating sessions', () => {
+  const user = createUser({
+    email: 'session-anonymous-owner@example.com',
+    username: 'session-anonymous-owner@example.com',
+    name: 'Session Anonymous Owner',
+    passwordHash: 'test',
+  });
+  const session = createSession({
+    userId: user.id,
+    tokenHash: 'anonymous-boundary-hash',
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    ipAddress: '203.0.113.30',
+    userAgent: 'Anonymous Boundary Browser',
+  });
+
+  const app = registerRoutes();
+  const listRoute = app.routes.find((item) => item.method === 'GET' && item.pathname === '/api/auth/sessions');
+  const logoutAllRoute = app.routes.find((item) => item.method === 'POST' && item.pathname === '/api/auth/sessions/logout-all');
+  const logoutOneRoute = app.routes.find((item) => item.method === 'DELETE' && item.pathname === '/api/auth/sessions/:sessionId');
+
+  for (const [route, req] of [
+    [listRoute, {}],
+    [logoutAllRoute, {}],
+    [logoutOneRoute, { params: { sessionId: session.id } }],
+  ]) {
+    const res = createMockRes();
+    runRoute(route, {
+      ...req,
+      headers: { 'user-agent': 'Anonymous Boundary Browser' },
+      socket: { remoteAddress: '203.0.113.31' },
+    }, res);
+
+    assert.equal(res.statusCode, 401);
+    assert.deepEqual(res.body, { error: 'Login is required.' });
+  }
+
+  const sessions = listSessionsForUser(user.id);
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0].id, session.id);
+});
+
 test('auth session route logs out a single owned session only', () => {
   const owner = createUser({
     email: 'session-single-owner@example.com',
@@ -768,5 +809,6 @@ test('admin password and status updates write audit logs', () => {
   assert.equal(JSON.stringify(passwordLog.metadata).includes('new-password-123'), false);
   assert.equal(statusLog.actorUserId, admin.id);
   assert.equal(statusLog.metadata.email, target.email);
+  assert.equal(statusLog.metadata.previousIsEnabled, true);
   assert.equal(statusLog.metadata.isEnabled, false);
 });

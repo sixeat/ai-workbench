@@ -3,6 +3,7 @@ import type { NodeType } from '../types/nodes';
 type ViteLikeEnv = Record<string, unknown>;
 
 const viteEnv = (import.meta as ImportMeta & { env?: ViteLikeEnv }).env || {};
+const MISSING_PRODUCTION_PROXY_URL_MESSAGE = 'VITE_PROXY_URL is required for production frontend builds. Use VITE_PROXY_URL=/ only when same-origin deployment is intentional.';
 
 function envString(env: ViteLikeEnv, key: string): string {
   const value = env[key];
@@ -14,33 +15,39 @@ function envFlag(env: ViteLikeEnv, key: string): boolean {
   return value === true || value === 'true';
 }
 
-function normalizeProxyUrl(value: string): string {
+function normalizeProxyUrl(value: string): { baseUrl: string; sameOrigin: boolean } {
   const trimmed = value.trim();
-  if (!trimmed || trimmed === '/') return '';
-  return trimmed.replace(/\/+$/, '');
+  if (!trimmed || trimmed === '/') return { baseUrl: '', sameOrigin: true };
+  return { baseUrl: trimmed.replace(/\/+$/, ''), sameOrigin: false };
 }
 
 export function resolveWorkbenchProxyUrl(env: ViteLikeEnv = viteEnv): {
   baseUrl: string;
   explicit: boolean;
   production: boolean;
+  sameOrigin: boolean;
+  error?: string;
 } {
   const configured = envString(env, 'VITE_PROXY_URL');
   const explicit = configured.length > 0;
   const production = envFlag(env, 'PROD') || envString(env, 'MODE') === 'production';
 
   if (explicit) {
+    const normalized = normalizeProxyUrl(configured);
     return {
-      baseUrl: normalizeProxyUrl(configured),
+      baseUrl: normalized.baseUrl,
       explicit,
       production,
+      sameOrigin: normalized.sameOrigin,
     };
   }
 
   return {
-    baseUrl: production ? '' : 'http://127.0.0.1:3000',
+    baseUrl: '',
     explicit,
     production,
+    sameOrigin: true,
+    error: production ? MISSING_PRODUCTION_PROXY_URL_MESSAGE : undefined,
   };
 }
 
@@ -52,9 +59,7 @@ export function buildWorkbenchApiUrl(path: string, baseUrl = PROXY_CONFIG.baseUr
 }
 
 function apiUrl(path: string): string {
-  if (!PROXY_CONFIG.explicit && PROXY_CONFIG.production) {
-    throw new Error('VITE_PROXY_URL is required for production frontend builds. Use VITE_PROXY_URL=/ only when same-origin deployment is intentional.');
-  }
+  if (PROXY_CONFIG.error) throw new Error(PROXY_CONFIG.error);
   return buildWorkbenchApiUrl(path);
 }
 
@@ -616,7 +621,18 @@ export async function proxyRequestRegistration(
   password: string,
   name: string,
   invitationCode = ''
-): Promise<{ ok: boolean; email: string; expiresAt: string; delivery?: { delivered: boolean; devCode?: string } }> {
+): Promise<{
+  ok: boolean;
+  email: string;
+  expiresAt: string;
+  delivery?: {
+    delivered: boolean;
+    method?: 'smtp' | 'console' | string;
+    expiresInMinutes?: number;
+    messageId?: string;
+    devCode?: string;
+  };
+}> {
   const response = await fetch(apiUrl('/api/auth/register/request'), {
     method: 'POST',
     credentials: 'include',
@@ -642,7 +658,18 @@ export async function proxyVerifyRegistration(email: string, code: string): Prom
 
 export async function proxyRequestPasswordReset(
   email: string
-): Promise<{ ok: boolean; email: string; expiresAt: string; delivery?: { delivered: boolean; devCode?: string } }> {
+): Promise<{
+  ok: boolean;
+  email: string;
+  expiresAt: string;
+  delivery?: {
+    delivered: boolean;
+    method?: 'smtp' | 'console' | string;
+    expiresInMinutes?: number;
+    messageId?: string;
+    devCode?: string;
+  };
+}> {
   const response = await fetch(apiUrl('/api/auth/password-reset/request'), {
     method: 'POST',
     credentials: 'include',
