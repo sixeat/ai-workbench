@@ -63,6 +63,7 @@ function createApiKeyTestService({
     const credentials = await resolveApiCredentials({
       userId,
       body: {
+        allowServerApiKeyDirect: true,
         apiKeyId,
         providerId,
       },

@@ -84,15 +84,15 @@ test('server deployment mode clears local browser API instances and blocks new l
   assert.deepEqual(Object.keys(useApiStore.getState().instances), []);
 });
 
-test('server key instances keep only apiKeyId and never store raw keys', () => {
+test('backend user key instances keep only apiKeyId and never store raw keys', () => {
   useApiStore.getState().setDeploymentMode('server');
   useApiStore.getState().syncServerKeyInstances([
     {
       id: 'key-1',
       ownerUserId: 'user-1',
-      keyScope: 'server',
+      keyScope: 'user',
       providerId: 'openai-compatible',
-      name: 'Server Key',
+      name: 'User Key',
       baseUrl: 'https://api.example.com',
       isEnabled: true,
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -100,23 +100,23 @@ test('server key instances keep only apiKeyId and never store raw keys', () => {
     },
   ]);
 
-  const instance = useApiStore.getState().instances['server:key-1'];
+  const instance = useApiStore.getState().instances['user:key-1'];
   assert.equal(instance.apiKey, '');
   assert.equal(instance.apiKeyId, 'key-1');
-  assert.equal(getInstanceRuntimeConfig('server:key-1')?.apiKey, '');
-  assert.equal(getInstanceRuntimeConfig('server:key-1')?.apiKeyId, 'key-1');
+  assert.equal(getInstanceRuntimeConfig('user:key-1')?.apiKey, '');
+  assert.equal(getInstanceRuntimeConfig('user:key-1')?.apiKeyId, 'key-1');
   assert.equal(JSON.stringify(useApiStore.getState().instances).includes('sk-'), false);
 });
 
-test('paginated server key sync does not remove instances missing from the current page', () => {
+test('paginated backend user key sync ignores server keys and keeps missing user keys by default', () => {
   useApiStore.getState().setDeploymentMode('server');
   useApiStore.getState().syncServerKeyInstances([
     {
       id: 'key-a',
       ownerUserId: 'user-1',
-      keyScope: 'server',
+      keyScope: 'user',
       providerId: 'openai-compatible',
-      name: 'Server Key A',
+      name: 'User Key A',
       baseUrl: 'https://api-a.example.com',
       isEnabled: true,
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -125,9 +125,9 @@ test('paginated server key sync does not remove instances missing from the curre
     {
       id: 'key-b',
       ownerUserId: 'user-1',
-      keyScope: 'server',
+      keyScope: 'user',
       providerId: 'seedance',
-      name: 'Server Key B',
+      name: 'User Key B',
       baseUrl: 'https://api-b.example.com',
       isEnabled: true,
       createdAt: '2026-01-01T00:00:00.000Z',
@@ -139,17 +139,48 @@ test('paginated server key sync does not remove instances missing from the curre
     {
       id: 'key-b',
       ownerUserId: 'user-1',
-      keyScope: 'server',
+      keyScope: 'user',
       providerId: 'seedance',
-      name: 'Server Key B Updated',
+      name: 'User Key B Updated',
       baseUrl: 'https://api-b.example.com',
       isEnabled: false,
       createdAt: '2026-01-01T00:00:00.000Z',
       updatedAt: '2026-01-01T00:00:01.000Z',
     },
+    {
+      id: 'server-key',
+      ownerUserId: 'local-user',
+      keyScope: 'server',
+      providerId: 'openai-compatible',
+      name: 'Hidden Server Key',
+      baseUrl: 'https://server.example.com',
+      isEnabled: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:01.000Z',
+    },
   ]);
 
-  assert.ok(useApiStore.getState().instances['server:key-a']);
-  assert.equal(useApiStore.getState().instances['server:key-b'].name, 'Server Key B Updated');
-  assert.equal(useApiStore.getState().instances['server:key-b'].isEnabled, false);
+  assert.ok(useApiStore.getState().instances['user:key-a']);
+  assert.equal(useApiStore.getState().instances['user:key-b'].name, 'User Key B Updated');
+  assert.equal(useApiStore.getState().instances['user:key-b'].isEnabled, false);
+  assert.equal(useApiStore.getState().instances['server:server-key'], undefined);
+});
+
+test('backend server keys never become workbench API instances', () => {
+  useApiStore.getState().setDeploymentMode('server');
+  useApiStore.getState().syncServerKeyInstances([
+    {
+      id: 'server-only-key',
+      ownerUserId: 'local-user',
+      keyScope: 'server',
+      providerId: 'openai-compatible',
+      name: 'Platform Secret Key',
+      baseUrl: 'https://server.example.com',
+      isEnabled: true,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:01.000Z',
+    },
+  ], { replaceMissing: true });
+
+  assert.deepEqual(useApiStore.getState().instances, {});
 });

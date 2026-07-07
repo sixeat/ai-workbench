@@ -92,6 +92,7 @@ test('gateway route table maps public API paths to future service boundaries', (
   assert.equal(gatewayRouteForPath('/api/chat')?.service, 'model-service');
   assert.equal(gatewayRouteForPath('/api/workflows/workflow-1')?.service, 'workflow-service');
   assert.equal(gatewayRouteForPath('/api/models')?.service, 'model-service');
+  assert.equal(gatewayRouteForPath('/api/model-capabilities/resolve')?.service, 'model-service');
   assert.equal(gatewayRouteForPath('/api/providers')?.service, 'model-service');
   assert.equal(gatewayRouteForPath('/api/images', 'POST')?.service, 'worker-service');
   assert.equal(gatewayRouteForPath('/api/images/image-1', 'GET')?.service, 'asset-service');

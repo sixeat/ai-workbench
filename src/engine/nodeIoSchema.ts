@@ -1,5 +1,6 @@
 import { getNodeDefinition } from '../data/nodeRegistry';
 import type { ConfigField, NodeData, NodeType, Port, PortType } from '../types/nodes';
+import type { ModelCapabilities } from '../types/modelCapabilities';
 import {
   isImageAsset,
   isParameterValue,
@@ -99,7 +100,7 @@ function getRecordValue(source: Record<string, unknown>, key: string): Record<st
 function applyCapabilitiesToConfigField(
   nodeType: NodeType,
   field: ConfigFieldSchema,
-  capabilities: Record<string, unknown> | null
+  capabilities: ModelCapabilities | null
 ): ConfigFieldSchema {
   if (!capabilities) return field;
   const image = getRecordValue(capabilities, 'image');
@@ -147,7 +148,7 @@ export function getNodeIOSchema(type: NodeType): NodeIOSchema | null {
   };
 }
 
-export function getNodeConfigSchema(type: NodeType, capabilities: Record<string, unknown> | null = null): NodeConfigSchema | null {
+export function getNodeConfigSchema(type: NodeType, capabilities: ModelCapabilities | null = null): NodeConfigSchema | null {
   const definition = getNodeDefinition(type);
   if (!definition) return null;
 
@@ -221,7 +222,7 @@ function valueMatchesConfigField(value: unknown, field: ConfigFieldSchema): bool
 
 export function validateNodeConfig(
   node: Pick<NodeData, 'type' | 'config'>,
-  capabilities: Record<string, unknown> | null = null
+  capabilities: ModelCapabilities | null = null
 ): ConfigValidationResult {
   const schema = getNodeConfigSchema(node.type, capabilities);
   if (!schema) return { ok: true, errors: [] };
@@ -230,6 +231,7 @@ export function validateNodeConfig(
     .map((field) => {
       const rawValue = node.config[field.key];
       const value = isEmptyConfigValue(rawValue) ? field.defaultValue : rawValue;
+      if (field.key === 'instanceId' && !isEmptyConfigValue(node.config.platformModelId)) return '';
       if (field.required && isEmptyConfigValue(value)) return `配置 ${field.label}(${field.key}) 为必填`;
       if (!valueMatchesConfigField(value, field)) return `配置 ${field.label}(${field.key}) 需要 ${field.type} 类型`;
       if (field.type === 'number' && !isEmptyConfigValue(value)) {

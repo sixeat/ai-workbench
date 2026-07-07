@@ -50,6 +50,42 @@ const DEFAULT_CAPABILITY_RULES = [
       quality: true,
       responseFormatB64: true,
       responseFormatUrl: true,
+      image: {
+        maxImages: 1,
+        maxReferenceImages: 16,
+      },
+    },
+  },
+  {
+    label: 'OpenAI GPT Image 2',
+    description: '适用于 gpt-image-2 系列，支持 1K/2K/4K、自定义合法尺寸、多参考图和 b64 返回。',
+    providerId: 'openai-compatible',
+    modelPattern: 'gpt-image-2*',
+    capabilities: {
+      chat: false,
+      imageGeneration: true,
+      imageReference: true,
+      multiImageReference: true,
+      negativePrompt: false,
+      seed: false,
+      quality: true,
+      responseFormatB64: true,
+      responseFormatUrl: false,
+      videoGeneration: false,
+      image: {
+        sizeAliases: ['auto', '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'],
+        minPixels: 655360,
+        maxPixels: 8294400,
+        minAspectRatio: 1 / 3,
+        maxAspectRatio: 3,
+        maxImages: 1,
+        maxReferenceImages: 16,
+        imageFormats: ['png', 'jpg', 'jpeg', 'webp'],
+        maxImageFileMb: 50,
+        maskMaxFileMb: 4,
+        outputFormats: ['png', 'jpeg', 'webp'],
+        supportsTransparentBackground: false,
+      },
     },
   },
   {
@@ -415,17 +451,31 @@ function wildcardToRegExp(pattern) {
   return new RegExp(`^${escaped.replace(/\*/g, '.*')}$`, 'i');
 }
 
-function getModelCapabilities(providerId = 'openai-compatible', model = '', repository = defaultModelCapabilityRepository) {
+function resolveModelCapabilitiesDetailed(providerId = 'openai-compatible', model = '', repository = defaultModelCapabilityRepository) {
   const rules = repository.listModelCapabilities().filter((rule) => rule.providerId === providerId);
   let resolved = { ...BASE_CAPABILITIES };
+  const matchedRules = [];
 
   for (const rule of rules) {
     if (rule.modelPattern === '*' || wildcardToRegExp(rule.modelPattern).test(model)) {
       resolved = mergeCapabilities(resolved, rule.capabilities);
+      matchedRules.push({
+        id: rule.id || `${rule.providerId}:${rule.modelPattern}`,
+        providerId: rule.providerId,
+        modelPattern: rule.modelPattern,
+      });
     }
   }
 
-  return resolved;
+  return {
+    capabilities: resolved,
+    matchedRules,
+    source: matchedRules.length > 0 ? 'matched-rules' : 'fallback',
+  };
+}
+
+function getModelCapabilities(providerId = 'openai-compatible', model = '', repository = defaultModelCapabilityRepository) {
+  return resolveModelCapabilitiesDetailed(providerId, model, repository).capabilities;
 }
 
 function filterImageBodyByCapabilities(body, capabilities) {
@@ -824,6 +874,7 @@ seedDefaultCapabilities();
 
 module.exports = {
   BASE_CAPABILITIES,
+  resolveModelCapabilitiesDetailed,
   getModelCapabilities,
   filterImageBodyByCapabilities,
   filterVideoBodyByCapabilities,

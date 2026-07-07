@@ -1,15 +1,19 @@
 import { Bot, ChevronDown, Cloud, Key, Sparkles } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { API_INSTANCE_SOURCE_LABELS, groupApiInstancesBySource } from '../../lib/apiInstanceDisplay';
+import type { ProxyPlatformModel } from '../../lib/apiProxy';
 import type { ModelCapabilityBadge } from '../../lib/modelCapabilities';
 import type { ApiInstance } from '../../types/api';
 import type { ReactNode } from 'react';
 
 interface NodeModelSelectorProps {
   selectedInstance: ApiInstance | null;
+  selectedPlatformModel: ProxyPlatformModel | null;
   availableInstances: ApiInstance[];
+  availablePlatformModels: ProxyPlatformModel[];
   availableModels: string[];
   selectedInstanceId?: string;
+  selectedPlatformModelId?: string;
   selectedModel?: string;
   showInstanceSelect: boolean;
   showModelSelect: boolean;
@@ -17,14 +21,18 @@ interface NodeModelSelectorProps {
   onToggleInstanceSelect: () => void;
   onToggleModelSelect: () => void;
   onSelectInstance: (instanceId: string) => void;
+  onSelectPlatformModel: (platformModelId: string) => void;
   onSelectModel: (model: string) => void;
 }
 
 export function NodeModelSelector({
   selectedInstance,
+  selectedPlatformModel,
   availableInstances,
+  availablePlatformModels,
   availableModels,
   selectedInstanceId,
+  selectedPlatformModelId,
   selectedModel,
   showInstanceSelect,
   showModelSelect,
@@ -32,9 +40,13 @@ export function NodeModelSelector({
   onToggleInstanceSelect,
   onToggleModelSelect,
   onSelectInstance,
+  onSelectPlatformModel,
   onSelectModel,
 }: NodeModelSelectorProps) {
   const groupedInstances = groupApiInstancesBySource(availableInstances);
+  const hasSelectableSource = availablePlatformModels.length > 0 || groupedInstances.custom.length > 0;
+  const isPlatformModelSelected = Boolean(selectedPlatformModel);
+  const canSelectRawModel = Boolean(selectedInstance);
 
   return (
     <div className="px-3 pb-2.5">
@@ -48,22 +60,22 @@ export function NodeModelSelector({
             className="flex w-full items-center gap-1.5 rounded-lg border border-gray-700/50 bg-gray-800/50 px-2 py-1.5 text-[10px] text-gray-300 hover:border-gray-600"
           >
             <Bot className="h-3 w-3 shrink-0 text-gray-500" />
-            <span className="truncate">{selectedInstance?.name || '选择 API'}</span>
+            <span className="truncate">{selectedPlatformModel?.displayName || selectedInstance?.name || '选择模型/API'}</span>
             <ChevronDown className="ml-auto h-3 w-3 shrink-0 text-gray-500" />
           </button>
 
           {showInstanceSelect && (
             <div className="absolute bottom-full left-0 z-50 mb-1 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-panel-border bg-panel-bg p-2 shadow-xl">
-              {availableInstances.length === 0 ? (
-                <div className="px-2 py-2 text-center text-[10px] text-gray-500">暂无可用 API 实例</div>
+              {!hasSelectableSource ? (
+                <div className="px-2 py-2 text-center text-[10px] text-gray-500">暂无平台模型或我的 API</div>
               ) : (
                 <div className="grid max-h-[220px] grid-cols-2 gap-2 overflow-auto">
-                  <ApiInstanceColumn
+                  <PlatformModelColumn
                     icon={<Cloud className="h-3 w-3" />}
-                    instances={groupedInstances.platform}
-                    selectedInstanceId={selectedInstanceId}
-                    title={API_INSTANCE_SOURCE_LABELS.platform}
-                    onSelectInstance={onSelectInstance}
+                    models={availablePlatformModels}
+                    selectedPlatformModelId={selectedPlatformModelId}
+                    title="平台模型"
+                    onSelectPlatformModel={onSelectPlatformModel}
                   />
                   <ApiInstanceColumn
                     icon={<Key className="h-3 w-3" />}
@@ -82,17 +94,24 @@ export function NodeModelSelector({
           <button
             onClick={(event) => {
               event.stopPropagation();
+              if (!canSelectRawModel) return;
               onToggleModelSelect();
             }}
-            disabled={!selectedInstance}
+            disabled={!canSelectRawModel}
+            title={isPlatformModelSelected ? '平台模型的上游模型由管理员配置' : undefined}
             className={cn(
               'flex w-full items-center gap-1.5 rounded-lg border border-gray-700/50 bg-gray-800/50 px-2 py-1.5 text-[10px] text-gray-300 hover:border-gray-600',
-              !selectedInstance && 'cursor-not-allowed opacity-50'
+              !canSelectRawModel && !isPlatformModelSelected && 'cursor-not-allowed opacity-50',
+              !canSelectRawModel && isPlatformModelSelected && 'cursor-default opacity-80'
             )}
           >
             <Sparkles className="h-3 w-3 shrink-0 text-gray-500" />
-            <span className="truncate">{selectedModel || '选择模型'}</span>
-            <ChevronDown className="ml-auto h-3 w-3 shrink-0 text-gray-500" />
+            <span className="truncate">{selectedPlatformModel ? selectedPlatformModel.model : selectedModel || '选择模型'}</span>
+            {canSelectRawModel ? (
+              <ChevronDown className="ml-auto h-3 w-3 shrink-0 text-gray-500" />
+            ) : (
+              <span className="ml-auto shrink-0 text-[9px] text-gray-500">只读</span>
+            )}
           </button>
 
           {showModelSelect && selectedInstance && (
@@ -189,6 +208,51 @@ function ApiInstanceColumn({
             >
               <Bot className="h-3 w-3 shrink-0" />
               <span className="truncate">{instance.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlatformModelColumn({
+  icon,
+  models,
+  onSelectPlatformModel,
+  selectedPlatformModelId,
+  title,
+}: {
+  icon: ReactNode;
+  models: ProxyPlatformModel[];
+  onSelectPlatformModel: (platformModelId: string) => void;
+  selectedPlatformModelId?: string;
+  title: string;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-panel-border bg-canvas-bg/40 p-1.5">
+      <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium text-gray-400">
+        {icon}
+        <span className="truncate">{title}</span>
+      </div>
+      {models.length === 0 ? (
+        <div className="px-1 py-2 text-[10px] text-gray-600">暂无平台模型</div>
+      ) : (
+        <div className="space-y-1">
+          {models.map((model) => (
+            <button
+              key={model.id}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSelectPlatformModel(model.id);
+              }}
+              className={cn(
+                'flex w-full flex-col rounded px-1.5 py-1.5 text-left text-[10px] text-gray-300 hover:bg-gray-700/50',
+                model.id === selectedPlatformModelId && 'bg-accent/10 text-accent'
+              )}
+            >
+              <span className="truncate">{model.displayName}</span>
+              <span className="mt-0.5 truncate text-[9px] text-gray-500">{model.model}</span>
             </button>
           ))}
         </div>

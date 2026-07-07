@@ -1,4 +1,4 @@
-import { CheckSquare, ChevronDown, Coins, Folder, History, Images, LockKeyhole, LogOut, Play, Save, ShieldCheck, Square, Terminal, Zap } from 'lucide-react';
+import { CheckSquare, ChevronDown, Coins, Folder, History, Images, Loader2, LockKeyhole, LogOut, Play, Save, ShieldCheck, Square, Terminal, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { executeWorkflow } from '../../engine/WorkflowEngine';
 import { useWorkflowStore } from '../../stores/workflowStore';
@@ -9,6 +9,7 @@ interface HeaderProps {
   onToggleAgentPanel: () => void;
   onToggleLogs: () => void;
   onToggleWorkflowManager: () => void;
+  onSaveWorkflow: () => void;
   onToggleTaskHistory: () => void;
   onToggleAssetLibrary: () => void;
   onToggleAccountSecurity: () => void;
@@ -17,6 +18,8 @@ interface HeaderProps {
   creditBalance?: number;
   currentUser?: ProxyUser | null;
   deploymentMode?: string;
+  workflowSaveMessage?: string;
+  workflowSaveStatus?: 'idle' | 'saving' | 'saved' | 'error';
   onLogout?: () => void;
 }
 
@@ -24,6 +27,7 @@ export function Header({
   onToggleAgentPanel,
   onToggleLogs,
   onToggleWorkflowManager,
+  onSaveWorkflow,
   onToggleTaskHistory,
   onToggleAssetLibrary,
   onToggleAccountSecurity,
@@ -32,6 +36,8 @@ export function Header({
   creditBalance,
   currentUser,
   deploymentMode,
+  workflowSaveMessage,
+  workflowSaveStatus = 'idle',
   onLogout,
 }: HeaderProps) {
   const { execution, reset } = useWorkflowStore();
@@ -87,8 +93,19 @@ export function Header({
           一键运行
         </button>
 
-        <button className="icon-button small" type="button" title="保存工作流" onClick={onToggleWorkflowManager}>
-          <Save className="h-4 w-4" />
+        <button
+          className={cn(
+            'icon-button small',
+            workflowSaveStatus === 'saved' && 'text-emerald-300',
+            workflowSaveStatus === 'error' && 'text-red-300',
+            workflowSaveStatus === 'saving' && 'cursor-not-allowed opacity-70'
+          )}
+          type="button"
+          title={workflowSaveMessage || '保存当前工作流'}
+          onClick={onSaveWorkflow}
+          disabled={workflowSaveStatus === 'saving'}
+        >
+          {workflowSaveStatus === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
         </button>
 
         {execution.status === 'running' && (

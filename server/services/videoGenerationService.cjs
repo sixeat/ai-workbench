@@ -13,6 +13,12 @@ const {
   assertAssetStorageQuota,
   toExposedQuotaError,
 } = require('./assetQuotaService.cjs');
+const {
+  addCredentialFallbackLog,
+  credentialAttempts,
+  shouldFallbackAfterUpstreamResult,
+} = require('./credentialFallbackService.cjs');
+const { credentialUsageError } = require('./credentialService.cjs');
 const { fetchPublicUrl } = require('./networkGuard.cjs');
 const { getVideoProviderAdapter } = require('./videoProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
@@ -34,7 +40,8 @@ function createVideoTask(userId, body, status = 'queued', taskRepository = defau
     input: {
       providerId: body.providerId || 'seedance',
       apiKeyId: body.apiKeyId || '',
-      baseUrl: body.apiKeyId ? '' : body.baseUrl || '',
+      platformModelId: body.platformModelId || '',
+      baseUrl: body.apiKeyId || body.platformModelId ? '' : body.baseUrl || '',
       publicBaseUrl: body.publicBaseUrl || '',
       model: body.model,
       mode: body.mode,
@@ -155,7 +162,7 @@ function createVideoGenerationService({
 
       const requestedProviderId = taskBody.providerId || 'seedance';
       const adapter = getVideoProviderAdapter(requestedProviderId);
-      const { baseUrl, apiKey, providerId } = await resolveApiCredentials({
+      const resolvedCredentials = await resolveApiCredentials({
         userId,
         body: {
           ...taskBody,
@@ -167,139 +174,190 @@ function createVideoGenerationService({
           baseUrl: adapter.defaultBaseUrl(secrets),
         },
       });
+      const attempts = credentialAttempts(resolvedCredentials);
 
-      if (!apiKey) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'API key is required' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 400, data: { error: 'API key is required' } };
-      }
+      for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+        const credentials = attempts[attemptIndex];
+        const isLastAttempt = attemptIndex === attempts.length - 1;
+        const { baseUrl, apiKey, providerId: credentialProviderId } = credentials;
+        const providerId = credentialProviderId || requestedProviderId;
 
-      const resolvedAdapter = getVideoProviderAdapter(providerId);
-      const arkBody = resolvedAdapter.buildCapabilityBody({ body: taskBody, req: workerReq });
+        if (!baseUrl) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'Base URL is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'Base URL is required' } };
+        }
+        if (!apiKey) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'API key is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'API key is required' } };
+        }
 
-      if (!arkBody.model) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'model is required' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 400, data: { error: 'model is required' } };
-      }
-      if (!arkBody.content.length) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'content is required' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 400, data: { error: 'content is required' } };
-      }
-
-      const capabilities = getModelCapabilities(providerId, arkBody.model);
-      const capabilityResult = filterVideoBodyByCapabilities(arkBody, capabilities);
-
-      if (!capabilityResult.ok) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
-          durationMs: Date.now() - startedAt,
-        });
-        return {
-          status: 400,
-          data: { error: capabilityResult.error, warnings: capabilityResult.warnings },
-        };
-      }
-
-      const request = resolvedAdapter.buildCreateRequest({
-        originalBody: taskBody,
-        body: capabilityResult.body,
-        req: workerReq,
-        apiKey,
-      });
-      const result = await proxyRequest(joinUrl(baseUrl, request.endpoint), {
-        method: 'POST',
-        headers: request.headers,
-        body: request.body,
-      });
-
-      if (result.status >= 400) {
-        const upstreamError = safeUpstreamTaskError(result, 'Video generation upstream request failed.');
-        console.error('/api/videos upstream error:', {
-          status: result.status,
-          statusText: result.statusText,
-          error: upstreamError,
-        });
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: upstreamError,
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: result.status, data: safeUpstreamErrorData(result, 'Video generation upstream request failed.') };
-      }
-
-      const output = {
-        providerId,
-        credential: {
-          apiKeyId: taskBody.apiKeyId || '',
-        },
-        request: {
-          model: arkBody.model,
-          mode: taskBody.mode || '',
-          ratio: arkBody.ratio,
-          resolution: capabilityResult.body.resolution,
-          duration: arkBody.duration,
-          generateAudio: capabilityResult.body.generate_audio,
-          watermark: arkBody.watermark,
-          contentCount: arkBody.content.length,
-        },
-        upstream: resolvedAdapter.summarizeUpstream(result.data),
-      };
-
-      taskRepository.addTaskLog(activeTask.id, {
-        event: 'upstream_video_submitted',
-        message: 'Video task submitted to upstream provider.',
-        data: {
-          upstreamTaskId: output.upstream?.taskId || '',
-          upstreamStatus: output.upstream?.status || '',
+        const resolvedAdapter = getVideoProviderAdapter(providerId);
+        const effectiveTaskBody = {
+          ...taskBody,
+          model: credentials.model || taskBody.model,
           providerId,
-          model: arkBody.model,
-        },
-      });
+        };
+        const arkBody = resolvedAdapter.buildCapabilityBody({ body: effectiveTaskBody, req: workerReq });
 
-      if (taskWasCancelled(activeTask.id, taskRepository)) {
+        if (!arkBody.model) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'model is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'model is required' } };
+        }
+        const credentialPolicyError = credentialUsageError(credentials, 'videoGeneration', arkBody.model);
+        if (credentialPolicyError) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: credentialPolicyError },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 403, data: { error: credentialPolicyError } };
+        }
+        if (!arkBody.content.length) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'content is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'content is required' } };
+        }
+
+        const capabilities = getModelCapabilities(providerId, arkBody.model);
+        const capabilityResult = filterVideoBodyByCapabilities(arkBody, capabilities);
+
+        if (!capabilityResult.ok) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
+            durationMs: Date.now() - startedAt,
+          });
+          return {
+            status: 400,
+            data: { error: capabilityResult.error, warnings: capabilityResult.warnings },
+          };
+        }
+
+        const request = resolvedAdapter.buildCreateRequest({
+          originalBody: effectiveTaskBody,
+          body: capabilityResult.body,
+          req: workerReq,
+          apiKey,
+        });
+        const result = await proxyRequest(joinUrl(baseUrl, request.endpoint), {
+          method: 'POST',
+          headers: request.headers,
+          body: request.body,
+        });
+
+        if (result.status >= 400) {
+          if (!isLastAttempt && shouldFallbackAfterUpstreamResult(result)) {
+            addCredentialFallbackLog(taskRepository, activeTask.id, credentials, result, attemptIndex);
+            continue;
+          }
+          const upstreamError = safeUpstreamTaskError(result, 'Video generation upstream request failed.');
+          console.error('/api/videos upstream error:', {
+            status: result.status,
+            statusText: result.statusText,
+            error: upstreamError,
+          });
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: upstreamError,
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: result.status, data: safeUpstreamErrorData(result, 'Video generation upstream request failed.') };
+        }
+
+        const output = {
+          providerId,
+          credential: {
+            apiKeyId: credentials.apiKeyId || taskBody.apiKeyId || '',
+            platformModelId: credentials.platformModelId || taskBody.platformModelId || '',
+            platformRouteId: credentials.platformRouteId || '',
+          },
+          request: {
+            model: arkBody.model,
+            mode: taskBody.mode || '',
+            ratio: arkBody.ratio,
+            resolution: capabilityResult.body.resolution,
+            duration: arkBody.duration,
+            generateAudio: capabilityResult.body.generate_audio,
+            watermark: arkBody.watermark,
+            contentCount: arkBody.content.length,
+          },
+          upstream: resolvedAdapter.summarizeUpstream(result.data),
+        };
+
         taskRepository.addTaskLog(activeTask.id, {
-          level: 'warn',
-          event: 'cancelled_after_upstream',
-          message: 'Video upstream request finished after cancellation; output was not written.',
+          event: 'upstream_video_submitted',
+          message: 'Video task submitted to upstream provider.',
           data: {
             upstreamTaskId: output.upstream?.taskId || '',
             upstreamStatus: output.upstream?.status || '',
             providerId,
             model: arkBody.model,
+            platformModelId: credentials.platformModelId || '',
+            platformRouteId: credentials.platformRouteId || '',
           },
         });
-        return { status: 409, data: { error: 'Task was cancelled.' } };
+
+        if (taskWasCancelled(activeTask.id, taskRepository)) {
+          taskRepository.addTaskLog(activeTask.id, {
+            level: 'warn',
+            event: 'cancelled_after_upstream',
+            message: 'Video upstream request finished after cancellation; output was not written.',
+            data: {
+              upstreamTaskId: output.upstream?.taskId || '',
+              upstreamStatus: output.upstream?.status || '',
+              providerId,
+              model: arkBody.model,
+            },
+          });
+          return { status: 409, data: { error: 'Task was cancelled.' } };
+        }
+
+        taskRepository.updateTask(activeTask.id, {
+          status: 'running',
+          output,
+          error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
+          durationMs: Date.now() - startedAt,
+        });
+
+        return {
+          status: 202,
+          data: {
+            taskId: activeTask.id,
+            task: taskRepository.getTask(activeTask.id),
+            data: result.data,
+            request: output.request,
+            warnings: capabilityResult.warnings,
+          },
+        };
       }
 
       taskRepository.updateTask(activeTask.id, {
-        status: 'running',
-        output,
-        error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
+        status: 'failed',
+        error: { message: 'No usable credentials found' },
         durationMs: Date.now() - startedAt,
       });
-
-      return {
-        status: 202,
-        data: {
-          taskId: activeTask.id,
-          task: taskRepository.getTask(activeTask.id),
-          data: result.data,
-          request: output.request,
-          warnings: capabilityResult.warnings,
-        },
-      };
+      return { status: 400, data: { error: 'No usable credentials found' } };
     } catch (error) {
       console.error('/api/videos task error:', error);
       if (activeTask && !taskWasCancelled(activeTask.id, taskRepository)) {
@@ -337,8 +395,14 @@ function createVideoGenerationService({
       : taskId;
     const providerId = query.providerId || localTask?.providerId || localOutput?.providerId || 'seedance';
     const adapter = getVideoProviderAdapter(providerId);
-    const body = {
-      apiKeyId: query.apiKeyId || localOutput?.credential?.apiKeyId,
+    const storedCredential = localOutput?.credential || {};
+    const body = storedCredential.platformModelId ? {
+      platformModelId: storedCredential.platformModelId,
+      platformRouteId: storedCredential.platformRouteId,
+      providerId,
+      baseUrl: adapter.defaultBaseUrl(secrets),
+    } : {
+      apiKeyId: localTask ? storedCredential.apiKeyId : query.apiKeyId,
       baseUrl: adapter.defaultBaseUrl(secrets),
       providerId,
     };

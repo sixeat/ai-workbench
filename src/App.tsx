@@ -24,7 +24,7 @@ import {
 import { preserveLoginFormSnapshot, resolveLoginSubmission } from './lib/authFormState';
 import { cn } from './lib/utils';
 import { useCanvasStore } from './stores/canvasStore';
-import { setWorkflowStorageMode, type WorkflowProject } from './stores/workflowDb';
+import { getWorkflow, saveWorkflow, setWorkflowStorageMode, type WorkflowProject } from './stores/workflowDb';
 
 const AccountSecurityPanel = lazy(() =>
   import('./components/panels/AccountSecurityPanel').then((module) => ({ default: module.AccountSecurityPanel }))
@@ -571,6 +571,20 @@ function ConnectionError({ message, onRetry }: { message: string; onRetry: () =>
   );
 }
 
+function AdminAccessDenied({ currentUser }: { currentUser?: ProxyAuthMe['user'] }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-[#0c0f12] px-6 text-gray-100">
+      <section className="max-w-md rounded-2xl border border-amber-500/20 bg-amber-500/10 p-6">
+        <LockKeyhole className="mb-4 h-8 w-8 text-amber-300" />
+        <h1 className="text-lg font-semibold text-white">无权访问管理员后台</h1>
+        <p className="mt-2 text-sm leading-6 text-amber-100/80">
+          当前账号{currentUser?.email ? `（${currentUser.email}）` : ''}不是管理员。后台只允许 admin 角色访问。
+        </p>
+      </section>
+    </main>
+  );
+}
+
 function PanelLoading() {
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-[#06090d]">
@@ -587,6 +601,7 @@ function registrationPolicyAllowsGate(authInfo: ProxyAuthMe | null): authInfo is
 }
 
 function App() {
+  const isAdminPath = typeof window !== 'undefined' && window.location.pathname.replace(/\/+$/, '') === '/admin';
   const [authInfo, setAuthInfo] = useState<ProxyAuthMe | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
@@ -601,10 +616,11 @@ function App() {
   const [isTaskHistoryOpen, setIsTaskHistoryOpen] = useState(false);
   const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
   const [isCreditAccountOpen, setIsCreditAccountOpen] = useState(false);
-  const [isAdminUsersOpen, setIsAdminUsersOpen] = useState(false);
   const [isAccountSecurityOpen, setIsAccountSecurityOpen] = useState(false);
   const [currentWorkflowId, setCurrentWorkflowId] = useState<string | undefined>();
   const [currentWorkflowName, setCurrentWorkflowName] = useState('未命名工作流');
+  const [workflowSaveStatus, setWorkflowSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [workflowSaveMessage, setWorkflowSaveMessage] = useState('');
   const { nodes, edges, clearCanvas, setEdges, setNodes } = useCanvasStore();
 
   const refreshCredits = useCallback(async () => {
@@ -678,6 +694,73 @@ function App() {
     setCurrentWorkflowName(project.name);
   };
 
+  const resetWorkflowSaveStatus = useCallback((delay = 1800) => {
+    window.setTimeout(() => {
+      setWorkflowSaveStatus('idle');
+      setWorkflowSaveMessage('');
+    }, delay);
+  }, []);
+
+  const handleSaveCurrentWorkflow = useCallback(async () => {
+    if (nodes.length === 0) {
+      setWorkflowSaveStatus('error');
+      setWorkflowSaveMessage('当前画布为空，没有可保存的内容。');
+      window.alert('当前画布为空，没有可保存的内容。');
+      resetWorkflowSaveStatus(2200);
+      return;
+    }
+
+    const defaultName = (currentWorkflowName || '未命名工作流').trim();
+    let name = defaultName;
+    if (!currentWorkflowId || defaultName === '未命名工作流') {
+      const input = window.prompt('保存当前工作流，请输入名称：', defaultName);
+      if (!input?.trim()) return;
+      name = input.trim();
+    }
+
+    setWorkflowSaveStatus('saving');
+    setWorkflowSaveMessage('正在保存当前工作流...');
+
+    try {
+      const now = new Date().toISOString();
+      const id = currentWorkflowId || `${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+      let existing: WorkflowProject | null = null;
+
+      if (currentWorkflowId) {
+        try {
+          existing = await getWorkflow(currentWorkflowId);
+        } catch {
+          existing = null;
+        }
+      }
+
+      const project: WorkflowProject = {
+        id,
+        name,
+        description: existing?.description || '',
+        nodes: JSON.parse(JSON.stringify(nodes)),
+        edges: JSON.parse(JSON.stringify(edges)),
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        nodeCount: nodes.length,
+        metadata: existing?.metadata,
+      };
+
+      const result = await saveWorkflow(project);
+      setCurrentWorkflowId(project.id);
+      setCurrentWorkflowName(project.name);
+      setWorkflowSaveStatus('saved');
+      setWorkflowSaveMessage(result.storage === 'local' ? '已保存到本地浏览器。' : '已保存当前工作流。');
+      resetWorkflowSaveStatus();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '保存工作流失败。';
+      setWorkflowSaveStatus('error');
+      setWorkflowSaveMessage(message);
+      window.alert(`保存失败：${message}`);
+      resetWorkflowSaveStatus(3200);
+    }
+  }, [currentWorkflowId, currentWorkflowName, edges, nodes, resetWorkflowSaveStatus]);
+
   const handleNewWorkflow = () => {
     if (nodes.length > 0 && !window.confirm('新建工作流会清空当前画布，确定继续吗？')) return;
     clearCanvas();
@@ -714,11 +797,26 @@ function App() {
     return <AuthGate authInfo={registrationPolicyAllowsGate(authInfo) ? authInfo : { ...authInfo, registration: { allowPublicRegistration: false, requireInvitationCode: false } }} onSuccess={() => refreshAuth(false)} />;
   }
 
+  if (isAdminPath) {
+    if (authInfo?.user?.role !== 'admin') {
+      return <AdminAccessDenied currentUser={authInfo?.user} />;
+    }
+
+    return (
+      <Suspense fallback={<PanelLoading />}>
+        <AdminUsersPanel
+          isOpen
+          currentUser={authInfo?.user}
+          onClose={() => undefined}
+          variant="page"
+        />
+      </Suspense>
+    );
+  }
+
   return (
     <main className="workbench-shell text-gray-100">
       <WorkbenchRail
-        canOpenAdminConsole={authInfo?.user?.role === 'admin'}
-        onOpenAdminConsole={() => setIsAdminUsersOpen(true)}
         onOpenApiManager={() => openApiManager('server')}
         onOpenAssetLibrary={() => setIsAssetLibraryOpen(true)}
         onOpenWorkflowManager={() => setIsWorkflowManagerOpen(true)}
@@ -729,6 +827,7 @@ function App() {
           onToggleAgentPanel={() => setIsAgentPanelOpen(true)}
           onToggleLogs={() => setIsLogsOpen(true)}
           onToggleWorkflowManager={() => setIsWorkflowManagerOpen(true)}
+          onSaveWorkflow={() => { void handleSaveCurrentWorkflow(); }}
           onToggleTaskHistory={() => setIsTaskHistoryOpen(true)}
           onToggleAssetLibrary={() => setIsAssetLibraryOpen(true)}
           onToggleAccountSecurity={() => setIsAccountSecurityOpen(true)}
@@ -737,6 +836,8 @@ function App() {
           currentUser={authInfo?.user}
           creditBalance={creditAccount?.balance}
           deploymentMode={authInfo?.deploymentMode}
+          workflowSaveMessage={workflowSaveMessage}
+          workflowSaveStatus={workflowSaveStatus}
           onLogout={authInfo?.authenticated ? handleLogout : undefined}
         />
 
@@ -792,21 +893,20 @@ function App() {
             onClose={() => setIsCreditAccountOpen(false)}
           />
         )}
-        {isApiManagerOpen && <ApiManagerPanel isOpen={isApiManagerOpen} onClose={() => setIsApiManagerOpen(false)} initialTab={apiManagerInitialTab} />}
+        {isApiManagerOpen && (
+          <ApiManagerPanel
+            isOpen={isApiManagerOpen}
+            onClose={() => setIsApiManagerOpen(false)}
+            initialTab={apiManagerInitialTab}
+            mode="workbench-user-keys"
+          />
+        )}
         {isAccountSecurityOpen && (
           <AccountSecurityPanel
             isOpen={isAccountSecurityOpen}
             currentUser={authInfo?.user}
             onClose={() => setIsAccountSecurityOpen(false)}
             onSessionInvalidated={async () => { await refreshAuth(); }}
-          />
-        )}
-        {isAdminUsersOpen && (
-          <AdminUsersPanel
-            isOpen={isAdminUsersOpen}
-            onClose={() => setIsAdminUsersOpen(false)}
-            currentUser={authInfo?.user}
-            onOpenApiManager={openApiManager}
           />
         )}
         {isAgentPanelOpen && <AgentPanel isOpen={isAgentPanelOpen} onClose={() => setIsAgentPanelOpen(false)} />}
@@ -820,14 +920,10 @@ function App() {
 export default App;
 
 function WorkbenchRail({
-  canOpenAdminConsole,
-  onOpenAdminConsole,
   onOpenApiManager,
   onOpenAssetLibrary,
   onOpenWorkflowManager,
 }: {
-  canOpenAdminConsole: boolean;
-  onOpenAdminConsole: () => void;
   onOpenApiManager: () => void;
   onOpenAssetLibrary: () => void;
   onOpenWorkflowManager: () => void;
@@ -837,7 +933,7 @@ function WorkbenchRail({
       <div className="brand-mark">
         <Zap className="h-5 w-5" />
       </div>
-      <button className="rail-button active" type="button" title="工作流" onClick={onOpenWorkflowManager}>
+      <button className="rail-button active" type="button" title="工作流库" onClick={onOpenWorkflowManager}>
         <Workflow className="h-5 w-5" />
       </button>
       <button className="rail-button" type="button" title="画布">
@@ -846,15 +942,10 @@ function WorkbenchRail({
       <button className="rail-button" type="button" title="素材库" onClick={onOpenAssetLibrary}>
         <Boxes className="h-5 w-5" />
       </button>
-      <button className="rail-button" type="button" title="API 管理" onClick={onOpenApiManager}>
+      <button className="rail-button" type="button" title="我的 API" onClick={onOpenApiManager}>
         <KeyRound className="h-5 w-5" />
       </button>
       <div className="rail-spacer" />
-      {canOpenAdminConsole && (
-        <button className="rail-button" type="button" title="管理端" onClick={onOpenAdminConsole}>
-          <ShieldCheck className="h-5 w-5" />
-        </button>
-      )}
       <button className="rail-button" type="button" title="设置">
         <SlidersHorizontal className="h-5 w-5" />
       </button>

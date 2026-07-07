@@ -31,7 +31,12 @@ function registerApiKeyRoutes(app, context) {
   }
 
   app.get('/api/api-keys', (req, res) => {
-    sendResponse(res, apiKeyManagementService.listApiKeys(req));
+    const wantsServerKeys = req.query?.keyScope === 'server';
+    const canIncludeServer = req.authUser?.role === 'admin';
+    if (wantsServerKeys && !ensureAdmin(req, res)) return;
+    sendResponse(res, apiKeyManagementService.listApiKeys(req, {
+      includeServer: canIncludeServer,
+    }));
   });
 
   app.post('/api/api-keys', (req, res) => {

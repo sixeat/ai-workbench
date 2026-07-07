@@ -183,11 +183,13 @@ test('credential service resolves saved credentials through an injected reposito
     getApiKeyForUser(apiKeyId, userId, includeSecret) {
       calls.push({ apiKeyId, includeSecret, userId });
       return {
+        allowedCapabilities: { chat: true },
         baseUrl: 'https://stored.example.com',
         encryptedKey,
         id: apiKeyId,
         isEnabled: true,
         keyScope: 'user',
+        models: ['stored-model'],
         ownerUserId: userId,
         providerId: 'seedance',
       };
@@ -207,9 +209,11 @@ test('credential service resolves saved credentials through an injected reposito
 
   assert.deepEqual(calls, [{ apiKeyId: 'key-1', includeSecret: true, userId: 'user-1' }]);
   assert.deepEqual(result, {
+    allowedCapabilities: { chat: true },
     apiKey: 'stored-secret',
     baseUrl: 'https://stored.example.com',
     keyScope: 'user',
+    models: ['stored-model'],
     providerId: 'seedance',
   });
 });

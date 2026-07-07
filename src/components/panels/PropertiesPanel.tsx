@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertCircle, CheckCircle2, ImagePlus, Loader2, Play, Settings, Trash2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, ImagePlus, Loader2, Play, Settings, Trash2 } from 'lucide-react';
 import type { Node } from '@xyflow/react';
 import { cn } from '../../lib/utils';
 import { getNodeDefinition } from '../../data/nodeRegistry';
@@ -18,6 +18,7 @@ import { collectionHasAsset, filterAssetsNotInCollection, getSuggestedRoles } fr
 import { loadAllAssetCollections } from '../../lib/assetCollectionCache';
 import { loadCachedModelCapabilities } from '../../lib/modelCapabilityCache';
 import { API_INSTANCE_SOURCE_LABELS, groupApiInstancesBySource } from '../../lib/apiInstanceDisplay';
+import { apiInstanceSupportsNode } from '../../lib/apiInstanceCapabilities';
 import {
   describeModelCapabilities,
   describeModelCapabilityFieldHint,
@@ -28,6 +29,7 @@ import {
 import { uniqueNodeRunAssetIds } from '../../lib/nodeRunDisplay';
 import { useApiStore } from '../../stores/apiStore';
 import { useCanvasStore } from '../../stores/canvasStore';
+import { platformModelSupportsNode, usePlatformModelStore } from '../../stores/platformModelStore';
 import { NODE_COLORS, type ConfigField, type NodeData, type NodeRunSummary, type NodeType } from '../../types/nodes';
 
 const GENERATIVE_NODE_TYPES = new Set<NodeType>([
@@ -42,6 +44,7 @@ const GENERATIVE_NODE_TYPES = new Set<NodeType>([
 ]);
 
 const MODEL_SOURCE_NODE_TYPES = new Set<NodeType>(['script', 'shotSplit', 'promptOptimize']);
+const DIRECT_MODEL_NODE_TYPES = new Set<NodeType>(['textModel', 'imageGen', 'imageToImage', 'videoGen', 'multiImageVideo']);
 
 function stringConfigValue(value: unknown): string {
   return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
@@ -49,15 +52,6 @@ function stringConfigValue(value: unknown): string {
 
 function inputValue(value: unknown): string | number {
   return typeof value === 'string' || typeof value === 'number' ? value : '';
-}
-
-function supportsNode(providerId: string, type: NodeType): boolean {
-  if (providerId === 'custom') return true;
-  const provider = getProviderTemplate(providerId);
-  if (!provider) return false;
-  if (type === 'imageToImage') return provider.supportedNodes.includes('imageGen');
-  if (type === 'multiImageVideo') return provider.supportedNodes.includes('videoGen');
-  return provider.supportedNodes.includes(type);
 }
 
 function summarize(value: unknown): string {
@@ -111,23 +105,27 @@ function shotListLength(value: unknown): number {
   return 0;
 }
 
-function estimateCreditCost(node: Node<NodeData>, instance: { keyScope?: 'user' | 'server' } | null) {
+function hasModelCapabilities(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
+}
+
+function estimateCreditCost(node: Node<NodeData>, instance: { keyScope?: 'user' | 'server' } | null, usesPlatformModel = false) {
   const type = node.data.type;
   if (!GENERATIVE_NODE_TYPES.has(type)) return null;
   if (MODEL_SOURCE_NODE_TYPES.has(type) && String(node.data.config.modelSource || 'inherit') === 'localOnly') {
     return {
       cost: 0,
-      detail: '本地规则不调用服务器 Key',
+      detail: '本地规则不调用模型服务',
       free: true,
       keyScope: 'local',
     };
   }
 
-  const keyScope = instance?.keyScope === 'user' ? 'user' : 'server';
+  const keyScope = !usesPlatformModel && instance?.keyScope === 'user' ? 'user' : 'platform';
   if (keyScope === 'user') {
     return {
       cost: 0,
-      detail: '当前选择用户自己的 API Key',
+      detail: '当前选择我的 API',
       free: true,
       keyScope,
     };
@@ -172,6 +170,106 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
+interface DarkSelectOption {
+  description?: string;
+  label: string;
+  value: string;
+}
+
+interface DarkSelectGroup {
+  label?: string;
+  options: DarkSelectOption[];
+}
+
+function flattenSelectGroups(groups: DarkSelectGroup[]): DarkSelectOption[] {
+  return groups.flatMap((group) => group.options);
+}
+
+function DarkSelect({
+  className,
+  emptyLabel = '暂无可选项',
+  groups,
+  onChange,
+  placeholder,
+  title,
+  value,
+}: {
+  className?: string;
+  emptyLabel?: string;
+  groups: DarkSelectGroup[];
+  onChange: (value: string) => void;
+  placeholder: string;
+  title?: string;
+  value: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const options = flattenSelectGroups(groups);
+  const selectedOption = options.find((option) => option.value === value);
+
+  return (
+    <div
+      className={cn('relative', className)}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <button
+        type="button"
+        title={title}
+        onClick={() => setOpen((current) => !current)}
+        onKeyDown={(event) => {
+          if (event.key === 'Escape') setOpen(false);
+        }}
+        className={cn(
+          'flex w-full items-center gap-2 rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-left text-xs text-white transition-colors',
+          'hover:border-gray-600 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/10'
+        )}
+      >
+        <span className={cn('min-w-0 flex-1 truncate', !selectedOption && 'text-gray-500')}>
+          {selectedOption?.label || placeholder}
+        </span>
+        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', open && 'rotate-180')} />
+      </button>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border border-panel-border bg-[#111821] shadow-2xl shadow-black/40">
+          {options.length === 0 ? (
+            <div className="px-3 py-2.5 text-[10px] leading-4 text-gray-500">{emptyLabel}</div>
+          ) : (
+            <div className="max-h-56 overflow-auto p-1.5">
+              {groups.map((group, groupIndex) => {
+                if (group.options.length === 0) return null;
+                return (
+                  <div key={`${group.label || 'group'}-${groupIndex}`} className={groupIndex > 0 ? 'mt-1.5 border-t border-panel-border pt-1.5' : ''}>
+                    {group.label && <div className="px-2 py-1 text-[9px] font-medium text-gray-500">{group.label}</div>}
+                    {group.options.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          onChange(option.value);
+                          setOpen(false);
+                        }}
+                        className={cn(
+                          'flex w-full flex-col rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5',
+                          option.value === value && 'bg-accent/10 text-accent'
+                        )}
+                      >
+                        <span className="truncate text-[11px] text-current">{option.label}</span>
+                        {option.description && <span className="mt-0.5 truncate text-[9px] text-gray-500">{option.description}</span>}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PropertiesPanel() {
   const {
     nodes,
@@ -186,6 +284,7 @@ export function PropertiesPanel() {
     setSelectedNodeIds,
   } = useCanvasStore();
   const { instances } = useApiStore();
+  const { loadPlatformModels, models: platformModels } = usePlatformModelStore();
   const [capabilityRecords, setCapabilityRecords] = useState<ProxyModelCapabilities[]>([]);
   const [capabilityError, setCapabilityError] = useState('');
   const [assetCollections, setAssetCollections] = useState<ProxyAssetCollection[]>([]);
@@ -208,6 +307,7 @@ export function PropertiesPanel() {
   const edgeData = (selectedEdge?.data || {}) as { targetKey?: unknown };
   const edgeTargetKey = String(edgeData.targetKey || selectedEdge?.targetHandle || '');
   const selectedInstanceId = stringConfigValue(selectedNode?.data.config?.instanceId);
+  const selectedPlatformModelId = stringConfigValue(selectedNode?.data.config?.platformModelId);
   const selectedModel = stringConfigValue(selectedNode?.data.config?.model);
   const lastRun = selectedNode?.data.lastRun as NodeRunSummary | undefined;
   const selectedAssetCollection = useMemo(
@@ -237,8 +337,17 @@ export function PropertiesPanel() {
 
   const availableInstances = useMemo(() => {
     if (!selectedNode) return [];
-    return Object.values(instances).filter((item) => item.isEnabled && supportsNode(item.providerId, selectedNode.data.type));
+    return Object.values(instances).filter((item) => (
+      item.isEnabled
+      && item.keyScope !== 'server'
+      && !item.id.startsWith('server:')
+      && apiInstanceSupportsNode(item, selectedNode.data.type)
+    ));
   }, [instances, selectedNode]);
+  const availablePlatformModels = useMemo(() => {
+    if (!selectedNode) return [];
+    return platformModels.filter((model) => platformModelSupportsNode(model, selectedNode.data.type));
+  }, [platformModels, selectedNode]);
   const groupedAvailableInstances = useMemo(
     () => groupApiInstancesBySource(availableInstances),
     [availableInstances]
@@ -252,15 +361,18 @@ export function PropertiesPanel() {
     return models.map((model: string) => ({ label: model, value: model }));
   }, [instances, selectedInstanceId]);
 
-  const selectedInstance = selectedInstanceId ? instances[selectedInstanceId] : null;
+  const selectedPlatformModel = selectedPlatformModelId
+    ? platformModels.find((model) => model.id === selectedPlatformModelId) || null
+    : null;
+  const selectedInstance = selectedPlatformModel || selectedInstanceId.startsWith('server:') ? null : selectedInstanceId ? instances[selectedInstanceId] : null;
   const creditEstimate = useMemo(
-    () => selectedNode ? estimateCreditCost(selectedNode, selectedInstance) : null,
-    [selectedInstance, selectedNode]
+    () => selectedNode ? estimateCreditCost(selectedNode, selectedInstance, Boolean(selectedPlatformModel)) : null,
+    [selectedInstance, selectedNode, selectedPlatformModel]
   );
-  const modelCapabilities = useMemo(
-    () => resolveModelCapabilities(capabilityRecords, selectedInstance?.providerId, selectedModel),
-    [capabilityRecords, selectedInstance?.providerId, selectedModel]
-  );
+  const modelCapabilities = useMemo(() => {
+    if (hasModelCapabilities(selectedPlatformModel?.capabilities)) return selectedPlatformModel.capabilities;
+    return resolveModelCapabilities(capabilityRecords, selectedInstance?.providerId, selectedModel);
+  }, [capabilityRecords, selectedInstance?.providerId, selectedModel, selectedPlatformModel?.capabilities]);
 
   const capabilityRows = useMemo(() => {
     if (!selectedNode) return [];
@@ -308,7 +420,8 @@ export function PropertiesPanel() {
         setCapabilityError('');
       })
       .catch((error: unknown) => setCapabilityError(error instanceof Error ? error.message : '模型能力加载失败'));
-  }, []);
+    void loadPlatformModels();
+  }, [loadPlatformModels]);
 
   useEffect(() => {
     if (addableRunAssets.length === 0) return;
@@ -347,6 +460,14 @@ export function PropertiesPanel() {
     (key: string, value: unknown) => {
       if (!selectedNodeId || !selectedNode) return;
       updateNodeData(selectedNodeId, { config: { ...selectedNode.data.config, [key]: value } });
+    },
+    [selectedNodeId, selectedNode, updateNodeData]
+  );
+
+  const handleConfigPatch = useCallback(
+    (patch: Record<string, unknown>) => {
+      if (!selectedNodeId || !selectedNode) return;
+      updateNodeData(selectedNodeId, { config: { ...selectedNode.data.config, ...patch } });
     },
     [selectedNodeId, selectedNode, updateNodeData]
   );
@@ -410,20 +531,158 @@ export function PropertiesPanel() {
 
   const shouldHideField = (field: ConfigField): boolean => {
     if (!selectedNode) return false;
-    const modelSource = String(selectedNode.data.config.modelSource || 'inherit');
-    if (MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && ['instanceId', 'model'].includes(field.key) && modelSource !== 'manual') return true;
+    const modelSource = String(selectedNode.data.config.modelSource || (selectedNode.data.config.platformModelId ? 'platform' : selectedNode.data.config.instanceId ? 'custom' : 'platform'));
+    if (field.key === 'instanceId' && MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && !['manual', 'platform'].includes(modelSource)) return true;
+    if (field.key === 'model' && modelSource === 'platform') return true;
+    if (MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && field.key === 'model' && modelSource !== 'manual') return true;
     if (MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && ['temperature', 'maxTokens'].includes(field.key) && modelSource === 'localOnly') return true;
     return false;
   };
 
+  const renderModelProviderField = (field: ConfigField) => {
+    if (!selectedNode) return null;
+    const rawSource = String(selectedNode.data.config.modelSource || (selectedNode.data.config.platformModelId ? 'platform' : selectedNode.data.config.instanceId ? 'custom' : 'platform'));
+    const isTextHelper = MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type);
+    const sourceValue = rawSource === 'manual' ? 'custom' : rawSource;
+    const platformOptions = availablePlatformModels.map((model) => ({
+      label: model.displayName,
+      value: model.id,
+      description: model.model,
+    }));
+    const instanceOptions = groupedAvailableInstances.custom.map((inst) => ({
+      label: inst.name,
+      value: inst.id,
+      description: getProviderTemplate(inst.providerId)?.name || inst.providerId,
+    }));
+
+    const updateSource = (nextSource: string) => {
+      if (nextSource === 'platform') {
+        const firstModel = selectedPlatformModel || availablePlatformModels[0];
+        handleConfigPatch({
+          modelSource: 'platform',
+          platformModelId: firstModel?.id || '',
+          instanceId: '',
+          model: firstModel?.model || '',
+        });
+        return;
+      }
+
+      const firstInstance = selectedInstance || availableInstances[0];
+      const firstModel = firstInstance?.models?.[0] || (firstInstance ? getProviderDefaultModels(firstInstance.providerId)[0] : '') || '';
+      handleConfigPatch({
+        modelSource: isTextHelper ? 'manual' : 'custom',
+        platformModelId: '',
+        instanceId: firstInstance?.id || '',
+        model: firstModel,
+      });
+    };
+
+    return (
+      <div key={field.key} className="space-y-2 rounded-lg border border-panel-border bg-canvas-bg/50 p-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <label className="text-[10px] text-gray-500">模型来源</label>
+          <span className="text-[9px] text-gray-600">{field.required ? '必选' : '可选'}</span>
+        </div>
+        <DarkSelect
+          value={sourceValue}
+          placeholder="选择模型来源"
+          emptyLabel="暂无可选模型来源"
+          groups={[{
+            options: [
+              { label: '平台模型', value: 'platform', description: '管理员发布，运行时按积分计费' },
+              { label: '我的 API', value: 'custom', description: '使用你自己的 Key，当前版本不扣平台积分' },
+            ],
+          }]}
+          onChange={updateSource}
+        />
+
+        {sourceValue === 'platform' ? (
+          <DarkSelect
+            value={selectedPlatformModelId}
+            placeholder="选择平台模型"
+            emptyLabel="暂无适合这个节点的平台模型"
+            groups={[{ options: platformOptions }]}
+            onChange={(platformModelId) => {
+              const model = availablePlatformModels.find((item) => item.id === platformModelId);
+              handleConfigPatch({
+                modelSource: 'platform',
+                platformModelId,
+                instanceId: '',
+                model: model?.model || '',
+              });
+            }}
+          />
+        ) : (
+          <DarkSelect
+            value={selectedInstanceId}
+            placeholder="选择我的 API"
+            emptyLabel="你还没有可用于这个节点的个人 API"
+            groups={[{ options: instanceOptions }]}
+            onChange={(instanceId) => {
+              const instance = availableInstances.find((item) => item.id === instanceId);
+              const firstModel = instance?.models?.[0] || (instance ? getProviderDefaultModels(instance.providerId)[0] : '') || '';
+              handleConfigPatch({
+                modelSource: isTextHelper ? 'manual' : 'custom',
+                platformModelId: '',
+                instanceId,
+                model: firstModel,
+              });
+            }}
+          />
+        )}
+
+        {Boolean(selectedNode.data.config.instanceId) && String(selectedNode.data.config.instanceId).startsWith('server:') && (
+          <p className="rounded-md border border-amber-500/20 bg-amber-500/10 px-2 py-1.5 text-[10px] leading-4 text-amber-200">
+            这是旧版工作流，仍引用了已废弃的共享 Key。请切换到平台模型后再运行。
+          </p>
+        )}
+      </div>
+    );
+  };
+
   const renderField = (field: ConfigField) => {
     if (!selectedNode || shouldHideField(field)) return null;
+    if (field.key === 'instanceId' && (DIRECT_MODEL_NODE_TYPES.has(selectedNode.data.type) || MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type))) {
+      return renderModelProviderField(field);
+    }
     const value = selectedNode.data.config[field.key] ?? field.defaultValue ?? '';
     const formValue = inputValue(value);
     const booleanValue = Boolean(value);
     const schemaField = configSchema?.fields[field.key];
     const fieldOptions = schemaField?.options || field.options;
     const fieldHint = describeModelCapabilityFieldHint(selectedNode.data.type, field.key, modelCapabilities);
+    const selectGroups: DarkSelectGroup[] = field.key === 'instanceId'
+      ? [
+        {
+          label: API_INSTANCE_SOURCE_LABELS.platform,
+          options: groupedAvailableInstances.platform.map((inst) => ({
+            label: inst.name,
+            value: inst.id,
+            description: getProviderTemplate(inst.providerId)?.name || inst.providerId,
+          })),
+        },
+        {
+          label: API_INSTANCE_SOURCE_LABELS.custom,
+          options: groupedAvailableInstances.custom.map((inst) => ({
+            label: inst.name,
+            value: inst.id,
+            description: getProviderTemplate(inst.providerId)?.name || inst.providerId,
+          })),
+        },
+      ]
+      : field.key === 'model'
+        ? [{ options: modelOptions }]
+        : [{ options: fieldOptions || [] }];
+    const selectPlaceholder = field.key === 'instanceId'
+      ? '选择 API 实例'
+      : field.key === 'model'
+        ? '选择模型'
+        : field.placeholder || `选择${field.label}`;
+    const selectEmptyLabel = field.key === 'instanceId'
+      ? '没有可用于这个节点的模型来源。请让管理员发布平台模型，或添加我的 API。'
+      : field.key === 'model'
+        ? '请先选择我的 API，或在 Key 配置里获取模型列表。'
+        : '暂无可选项';
 
     return (
       <div key={field.key} className="space-y-1">
@@ -464,46 +723,13 @@ export function PropertiesPanel() {
         )}
 
         {field.type === 'select' && (
-          <select
+          <DarkSelect
             value={String(formValue)}
-            onChange={(event) => handleConfigChange(field.key, event.target.value)}
-            className="w-full rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-          >
-            {field.key === 'instanceId' && (
-              <>
-                <option value="">选择 API 实例</option>
-                <optgroup label={API_INSTANCE_SOURCE_LABELS.platform}>
-                  {groupedAvailableInstances.platform.map((inst) => (
-                    <option key={inst.id} value={inst.id}>
-                      {inst.name} ({getProviderTemplate(inst.providerId)?.name || inst.providerId})
-                    </option>
-                  ))}
-                </optgroup>
-                <optgroup label={API_INSTANCE_SOURCE_LABELS.custom}>
-                  {groupedAvailableInstances.custom.map((inst) => (
-                    <option key={inst.id} value={inst.id}>
-                      {inst.name} ({getProviderTemplate(inst.providerId)?.name || inst.providerId})
-                    </option>
-                  ))}
-                </optgroup>
-              </>
-            )}
-            {field.key === 'model' && (
-              <>
-                <option value="">选择模型</option>
-                {modelOptions.map((opt) => (
-                  <option key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </option>
-                ))}
-              </>
-            )}
-            {field.key !== 'instanceId' && field.key !== 'model' && fieldOptions?.map((opt) => (
-              <option key={opt.value} value={opt.value}>
-                {opt.label}
-              </option>
-            ))}
-          </select>
+            placeholder={selectPlaceholder}
+            emptyLabel={selectEmptyLabel}
+            groups={selectGroups}
+            onChange={(nextValue) => handleConfigChange(field.key, nextValue)}
+          />
         )}
 
         {field.type === 'boolean' && (
@@ -544,17 +770,13 @@ export function PropertiesPanel() {
           </Section>
 
           <Section title="连接用途">
-            <select
+            <DarkSelect
               value={edgeTargetKey}
-              onChange={(event) => updateEdgeRoute(selectedEdge.id, { targetKey: event.target.value })}
-              className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-            >
-              {edgeTargetOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              placeholder="选择连接用途"
+              emptyLabel="这个目标节点没有可编辑的连接用途。"
+              groups={[{ options: edgeTargetOptions }]}
+              onChange={(targetKey) => updateEdgeRoute(selectedEdge.id, { targetKey })}
+            />
             <p className="text-[10px] leading-4 text-gray-500">
               如果自动识别不符合预期，可以在这里把这条线改成 prompt、referenceImage、content 等目标输入。
             </p>
@@ -685,12 +907,12 @@ export function PropertiesPanel() {
                 tone={creditEstimate.free ? 'success' : 'warning'}
               />
               <Metric
-                label="Key"
+                label="来源"
                 value={
                   creditEstimate.keyScope === 'user'
-                    ? '用户 Key'
-                    : creditEstimate.keyScope === 'server'
-                      ? '服务器 Key'
+                    ? '我的 API'
+                    : creditEstimate.keyScope === 'platform'
+                      ? '平台模型'
                       : '本地规则'
                 }
                 tone={creditEstimate.free ? 'success' : 'warning'}
@@ -726,32 +948,23 @@ export function PropertiesPanel() {
             {addableRunAssets.length > 0 && (
               <div className="space-y-2 rounded-md border border-panel-border bg-panel-bg/60 p-2">
                 <div className="grid grid-cols-[1fr_92px] gap-2">
-                  <select
+                  <DarkSelect
                     value={selectedAssetCollection?.id || ''}
-                    onChange={(event) => setAssetCollectionId(event.target.value)}
-                    className="min-w-0 rounded-md border border-panel-border bg-canvas-bg px-2 py-1 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+                    placeholder="先创建素材集合"
+                    emptyLabel="请先在素材库创建一个集合。"
+                    groups={[{ options: assetCollections.map((collection) => ({ label: collection.name, value: collection.id })) }]}
+                    onChange={setAssetCollectionId}
+                    className="min-w-0"
                     title="选择目标素材集合"
-                  >
-                    {assetCollections.length === 0 ? (
-                      <option value="">先创建素材集合</option>
-                    ) : (
-                      assetCollections.map((collection) => (
-                        <option key={collection.id} value={collection.id}>{collection.name}</option>
-                      ))
-                    )}
-                  </select>
-                  <select
+                  />
+                  <DarkSelect
                     value={assetRole}
-                    onChange={(event) => setAssetRole(event.target.value)}
-                    className="rounded-md border border-panel-border bg-canvas-bg px-2 py-1 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+                    placeholder="生成图"
+                    emptyLabel="暂无角色，默认按生成图加入。"
+                    groups={[{ options: assetRoles.length === 0 ? [{ label: '生成图', value: '生成图' }] : assetRoles.map((role) => ({ label: role, value: role })) }]}
+                    onChange={setAssetRole}
                     title="加入集合时的素材角色"
-                  >
-                    {assetRoles.length === 0 ? (
-                      <option value="">生成图</option>
-                    ) : (
-                      assetRoles.map((role) => <option key={role} value={role}>{role}</option>)
-                    )}
-                  </select>
+                  />
                 </div>
                 {assetLibraryNotice && <div className="text-[10px] text-emerald-300">{assetLibraryNotice}</div>}
                 {assetLibraryError && <div className="text-[10px] text-red-300">{assetLibraryError}</div>}
@@ -828,8 +1041,10 @@ export function PropertiesPanel() {
 
         {(capabilityRows.length > 0 || capabilityError) && (
           <Section title="模型限制">
-            {selectedInstance && (
-              <div className="truncate text-[10px] text-gray-500">{getProviderTemplate(selectedInstance.providerId)?.name || selectedInstance.providerId}</div>
+            {(selectedPlatformModel || selectedInstance) && (
+              <div className="truncate text-[10px] text-gray-500">
+                {selectedPlatformModel ? `平台模型 / ${selectedPlatformModel.displayName}` : getProviderTemplate(selectedInstance!.providerId)?.name || selectedInstance!.providerId}
+              </div>
             )}
             {capabilityError && <div className="text-[10px] text-red-400">{capabilityError}</div>}
             {capabilityRows.length > 0 && (

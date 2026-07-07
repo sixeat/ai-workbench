@@ -157,7 +157,7 @@ test('api key list route supports pagination, filters, and user isolation', () =
   route.handler({ query: { limit: 2, offset: 0 } }, firstPage);
   assert.equal(firstPage.statusCode, 200);
   assert.equal(firstPage.body.count, 2);
-  assert.equal(firstPage.body.total, 3);
+  assert.equal(firstPage.body.total, 2);
   assert.equal(firstPage.body.limit, 2);
   assert.equal(firstPage.body.offset, 0);
   assert.deepEqual(firstPage.body.quota, {
@@ -165,12 +165,22 @@ test('api key list route supports pagination, filters, and user isolation', () =
     maxUserApiKeys: 10,
     remainingUserKeys: 8,
   });
-  assert.deepEqual(firstPage.body.apiKeys.map((key) => key.id), ['key-list-server', 'key-list-seedance']);
+  assert.deepEqual(firstPage.body.apiKeys.map((key) => key.id), ['key-list-seedance', 'key-list-openai']);
+  assert.equal(firstPage.body.apiKeys.some((key) => key.id === 'key-list-server'), false);
   assert.equal(firstPage.body.apiKeys.some((key) => key.id === 'key-list-other-private'), false);
 
   const secondPage = createMockRes();
   route.handler({ query: { limit: 2, offset: 2 } }, secondPage);
-  assert.deepEqual(secondPage.body.apiKeys.map((key) => key.id), ['key-list-openai']);
+  assert.deepEqual(secondPage.body.apiKeys.map((key) => key.id), []);
+
+  const adminServerKeys = createMockRes();
+  route.handler({
+    authUser: { id: owner.id, role: 'admin' },
+    query: { keyScope: 'server', limit: 10 },
+  }, adminServerKeys);
+  assert.equal(adminServerKeys.statusCode, 200);
+  assert.equal(adminServerKeys.body.total, 1);
+  assert.deepEqual(adminServerKeys.body.apiKeys.map((key) => key.id), ['key-list-server']);
 
   const filtered = createMockRes();
   route.handler({
@@ -396,6 +406,55 @@ test('api key update audit only marks fields that actually changed', () => {
     changedEnabled: false,
   });
   assert.equal(JSON.stringify(updateLog.metadata).includes('encrypted:'), false);
+});
+
+test('api key update persists allowed capabilities to sqlite', () => {
+  const admin = createUser({
+    email: 'server-capability-admin@example.com',
+    username: 'server-capability-admin@example.com',
+    name: 'Server Capability Admin',
+    passwordHash: 'test',
+  });
+  const serverKey = upsertApiKey({
+    id: 'server-capability-key',
+    ownerUserId: 'local-user',
+    keyScope: 'server',
+    providerId: 'openai-compatible',
+    name: 'Server Capability Key',
+    encryptedKey: 'encrypted:server',
+    isEnabled: true,
+  });
+  const app = registerRoutesFor(admin.id, 5);
+  const route = app.routes.find((item) => item.method === 'PATCH' && item.pathname === '/api/api-keys/:apiKeyId');
+
+  const res = createMockRes();
+  route.handler({
+    authUser: { id: admin.id, role: 'admin' },
+    params: { apiKeyId: serverKey.id },
+    body: {
+      allowedCapabilities: {
+        chat: false,
+        imageGeneration: true,
+        videoGeneration: false,
+      },
+    },
+  }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.apiKey.allowedCapabilities, {
+    chat: false,
+    imageGeneration: true,
+    videoGeneration: false,
+  });
+  assert.deepEqual(getApiKey(serverKey.id, true).allowedCapabilities, {
+    chat: false,
+    imageGeneration: true,
+    videoGeneration: false,
+  });
+  assert.equal(
+    db.prepare('select allowed_capabilities_json from api_keys where id = ?').get(serverKey.id).allowed_capabilities_json,
+    '{"chat":false,"imageGeneration":true,"videoGeneration":false}'
+  );
 });
 
 test('api key server scoped keys require admin for create, update, delete, and test', async () => {

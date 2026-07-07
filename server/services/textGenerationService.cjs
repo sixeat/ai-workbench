@@ -1,6 +1,14 @@
 const { randomUUID } = require('crypto');
+const { getModelCapabilities } = require('../modelCapabilities.cjs');
 const { safeTaskError, safeUpstreamErrorData, safeUpstreamTaskError } = require('../httpErrors.cjs');
 const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
+const {
+  addCredentialFallbackLog,
+  credentialAttemptLogData,
+  credentialAttempts,
+  shouldFallbackAfterUpstreamResult,
+} = require('./credentialFallbackService.cjs');
+const { credentialUsageError } = require('./credentialService.cjs');
 const { getTextProviderAdapter } = require('./textProviderAdapters.cjs');
 
 function stripSecretFields(body = {}) {
@@ -37,8 +45,9 @@ function createTextTask(userId, body, status = 'queued', taskRepository = defaul
     input: {
       ...safeBody,
       requestKind,
-      baseUrl: safeBody.apiKeyId ? '' : safeBody.baseUrl || '',
+      baseUrl: safeBody.apiKeyId || safeBody.platformModelId ? '' : safeBody.baseUrl || '',
       apiKeyId: safeBody.apiKeyId || '',
+      platformModelId: safeBody.platformModelId || '',
       messageCount: Array.isArray(safeBody.messages) ? safeBody.messages.length : 0,
       hasSystem: Boolean(safeBody.system),
       upstreamTaskIds: Array.isArray(safeBody.upstreamTaskIds) ? safeBody.upstreamTaskIds : [],
@@ -54,7 +63,7 @@ function createTextGenerationService({
   taskRepository = defaultTaskRepository,
 }) {
   async function resolveRequestCredentials({ userId, body, secrets }) {
-    if (body.apiKeyId) {
+    if (body.apiKeyId || body.platformModelId) {
       return resolveApiCredentials({ userId, body, secrets });
     }
     const direct = resolveDirectCredentials(body, secrets);
@@ -82,87 +91,134 @@ function createTextGenerationService({
         return { status: 409, data: { error: 'Task was cancelled.' } };
       }
 
-      const { baseUrl, apiKey, providerId: credentialProviderId } = await resolveRequestCredentials({
+      const resolvedCredentials = await resolveRequestCredentials({
         userId,
         body: taskBody,
         secrets,
       });
-
-      if (!baseUrl) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'Base URL is required' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 400, data: { error: 'Base URL is required' } };
-      }
-
-      if (!apiKey) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'API key is required' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 400, data: { error: 'API key is required' } };
-      }
-
+      const attempts = credentialAttempts(resolvedCredentials);
       const requestKind = taskBody.requestKind === 'claude' ? 'claude' : 'chat';
-      const providerId = credentialProviderId || taskBody.providerId || (requestKind === 'claude' ? 'anthropic' : 'openai-compatible');
-      const adapter = getTextProviderAdapter(providerId, requestKind === 'claude' ? 'anthropic' : undefined);
-      const request = adapter.buildRequest({ apiKey, body: taskBody, providerId });
-      const result = await proxyRequest(joinUrl(baseUrl, adapter.endpoint(providerId)), {
-        method: 'POST',
-        headers: request.headers,
-        body: request.body,
-      });
 
-      taskRepository.addTaskLog(activeTask.id, {
-        event: 'upstream_text_response',
-        message: `Text upstream responded with HTTP ${result.status}.`,
-        data: {
-          upstreamStatus: result.status,
+      for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+        const credentials = attempts[attemptIndex];
+        const isLastAttempt = attemptIndex === attempts.length - 1;
+        const { baseUrl, apiKey, providerId: credentialProviderId } = credentials;
+
+        if (!baseUrl) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'Base URL is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'Base URL is required' } };
+        }
+
+        if (!apiKey) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'API key is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'API key is required' } };
+        }
+
+        const providerId = credentialProviderId || taskBody.providerId || (requestKind === 'claude' ? 'anthropic' : 'openai-compatible');
+        const effectiveBody = {
+          ...taskBody,
+          model: credentials.model || taskBody.model || '',
           providerId,
-          model: taskBody.model || '',
-        },
-      });
+        };
+        const credentialPolicyError = credentialUsageError(credentials, 'chat', effectiveBody.model || '');
+        if (credentialPolicyError) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: credentialPolicyError },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 403, data: { error: credentialPolicyError } };
+        }
+        const modelCapabilities = getModelCapabilities(providerId, effectiveBody.model || '');
+        if (!modelCapabilities.chat) {
+          const capabilityError = 'The selected model is not marked as supporting text generation.';
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: capabilityError },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: capabilityError } };
+        }
+        const adapter = getTextProviderAdapter(providerId, requestKind === 'claude' ? 'anthropic' : undefined);
+        const request = adapter.buildRequest({ apiKey, body: effectiveBody, providerId });
+        const result = await proxyRequest(joinUrl(baseUrl, adapter.endpoint(providerId)), {
+          method: 'POST',
+          headers: request.headers,
+          body: request.body,
+        });
 
-      if (taskWasCancelled(activeTask.id, taskRepository)) {
         taskRepository.addTaskLog(activeTask.id, {
-          level: 'warn',
-          event: 'cancelled_after_upstream',
-          message: 'Text upstream request finished after cancellation; output was not written.',
+          event: 'upstream_text_response',
+          message: `Text upstream responded with HTTP ${result.status}.`,
           data: {
+            ...credentialAttemptLogData(credentials, attemptIndex),
             upstreamStatus: result.status,
             providerId,
-            model: taskBody.model || '',
+            model: effectiveBody.model || '',
           },
         });
-        return { status: 409, data: { error: 'Task was cancelled.' } };
-      }
 
-      if (result.status >= 400) {
+        if (taskWasCancelled(activeTask.id, taskRepository)) {
+          taskRepository.addTaskLog(activeTask.id, {
+            level: 'warn',
+            event: 'cancelled_after_upstream',
+            message: 'Text upstream request finished after cancellation; output was not written.',
+            data: {
+              upstreamStatus: result.status,
+              providerId,
+              model: taskBody.model || '',
+            },
+          });
+          return { status: 409, data: { error: 'Task was cancelled.' } };
+        }
+
+        if (result.status >= 400) {
+          if (!isLastAttempt && shouldFallbackAfterUpstreamResult(result)) {
+            addCredentialFallbackLog(taskRepository, activeTask.id, credentials, result, attemptIndex);
+            continue;
+          }
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: safeUpstreamTaskError(result, 'Text generation upstream request failed.'),
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: result.status, data: safeUpstreamErrorData(result, 'Text generation upstream request failed.') };
+        }
+
         taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: safeUpstreamTaskError(result, 'Text generation upstream request failed.'),
+          status: 'succeeded',
+          output: result.data,
+          error: null,
           durationMs: Date.now() - startedAt,
         });
-        return { status: result.status, data: safeUpstreamErrorData(result, 'Text generation upstream request failed.') };
+
+        return {
+          status: result.status,
+          data: {
+            ...result.data,
+            taskId: activeTask.id,
+          },
+        };
       }
 
       taskRepository.updateTask(activeTask.id, {
-        status: 'succeeded',
-        output: result.data,
-        error: null,
+        status: 'failed',
+        error: { message: 'No usable credentials found' },
         durationMs: Date.now() - startedAt,
       });
-
-      return {
-        status: result.status,
-        data: {
-          ...result.data,
-          taskId: activeTask.id,
-        },
-      };
+      return { status: 400, data: { error: 'No usable credentials found' } };
     } catch (error) {
       console.error('/api/text task error:', error);
       if (!taskWasCancelled(activeTask.id, taskRepository)) {

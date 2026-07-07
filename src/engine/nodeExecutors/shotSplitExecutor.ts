@@ -125,7 +125,7 @@ export async function executeShotSplit(
       mode: 'model',
       modelSourceUsed: resolved.source,
       modelContext: makeModelContext(
-        { instanceId: resolved.instanceId, model: resolved.model },
+        { instanceId: resolved.instanceId, platformModelId: resolved.platformModelId, model: resolved.model },
         { sourceNodeType: 'shotSplit' }
       ),
     };

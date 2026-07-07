@@ -13,6 +13,12 @@ const {
   assertAssetStorageQuota,
   toExposedQuotaError,
 } = require('./assetQuotaService.cjs');
+const {
+  addCredentialFallbackLog,
+  credentialAttempts,
+  shouldFallbackAfterUpstreamResult,
+} = require('./credentialFallbackService.cjs');
+const { credentialUsageError } = require('./credentialService.cjs');
 const { fetchPublicUrl } = require('./networkGuard.cjs');
 const { getImageProviderAdapter } = require('./imageProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
@@ -34,7 +40,8 @@ function createImageTask(userId, body, status = 'queued', taskRepository = defau
     input: {
       providerId: body.providerId || 'openai-compatible',
       apiKeyId: body.apiKeyId || '',
-      baseUrl: body.apiKeyId ? '' : body.baseUrl || '',
+      platformModelId: body.platformModelId || '',
+      baseUrl: body.apiKeyId || body.platformModelId ? '' : body.baseUrl || '',
       publicBaseUrl: body.publicBaseUrl || '',
       model: body.model,
       prompt: body.prompt,
@@ -168,155 +175,190 @@ function createImageGenerationService({
         return { status: 409, data: { error: 'Task was cancelled.' } };
       }
 
-      const { baseUrl, apiKey, providerId } = await resolveApiCredentials({ userId, body: taskBody, secrets });
+      const resolvedCredentials = await resolveApiCredentials({ userId, body: taskBody, secrets });
+      const attempts = credentialAttempts(resolvedCredentials);
 
-      if (!baseUrl) {
+      for (let attemptIndex = 0; attemptIndex < attempts.length; attemptIndex += 1) {
+        const credentials = attempts[attemptIndex];
+        const isLastAttempt = attemptIndex === attempts.length - 1;
+        const { baseUrl, apiKey, providerId } = credentials;
+
+        if (!baseUrl) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'Base URL is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'Base URL is required' } };
+        }
+        if (!apiKey) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'API key is required' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 400, data: { error: 'API key is required' } };
+        }
+
+        const {
+          baseUrl: _baseUrl,
+          apiKey: _apiKey,
+          apiKeyId: _apiKeyId,
+          platformModelId: _platformModelId,
+          publicBaseUrl: _publicBaseUrl,
+          userId: _userId,
+          providerId: _providerId,
+          upstreamTaskIds: _upstreamTaskIds,
+          ...imageBody
+        } = taskBody;
+
+        const normalizedImageBody = normalizeImageBodyAliases({
+          ...imageBody,
+          model: credentials.model || imageBody.model,
+        });
+        const credentialPolicyError = credentialUsageError(credentials, 'imageGeneration', normalizedImageBody.model);
+        if (credentialPolicyError) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: credentialPolicyError },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 403, data: { error: credentialPolicyError } };
+        }
+        const capabilities = getModelCapabilities(providerId, normalizedImageBody.model);
+        const capabilityResult = filterImageBodyByCapabilities(normalizedImageBody, capabilities);
+
+        if (!capabilityResult.ok) {
+          if (!isLastAttempt) continue;
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
+            durationMs: Date.now() - startedAt,
+          });
+          return {
+            status: 400,
+            data: { error: capabilityResult.error, warnings: capabilityResult.warnings },
+          };
+        }
+
+        const adapter = getImageProviderAdapter(providerId);
+        const request = adapter.buildRequest({
+          apiKey,
+          body: capabilityResult.body,
+          req: workerReq,
+        });
+        const result = await proxyRequest(joinUrl(baseUrl, adapter.endpoint), {
+          method: 'POST',
+          headers: request.headers,
+          body: request.body,
+        });
+
+        if (result.status >= 400) {
+          if (!isLastAttempt && shouldFallbackAfterUpstreamResult(result)) {
+            addCredentialFallbackLog(taskRepository, activeTask.id, credentials, result, attemptIndex);
+            continue;
+          }
+          const upstreamError = safeUpstreamTaskError(result, 'Image generation upstream request failed.');
+          console.error('/api/images upstream error:', {
+            status: result.status,
+            statusText: result.statusText,
+            error: upstreamError,
+          });
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: upstreamError,
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: result.status, data: safeUpstreamErrorData(result, 'Image generation upstream request failed.') };
+        }
+
+        const items = adapter.extractItems(result.data);
+        const payloads = [];
+        const saved = [];
+
+        for (let i = 0; i < items.length; i += 1) {
+          if (taskWasCancelled(activeTask.id, taskRepository)) {
+            taskRepository.addTaskLog(activeTask.id, {
+              level: 'warn',
+              event: 'cancelled_after_upstream',
+              message: 'Image upstream request finished after cancellation; output was not written.',
+            });
+            return { status: 409, data: { error: 'Task was cancelled.' } };
+          }
+
+          const payload = await resolveGeneratedImagePayload(items[i], i);
+          if (payload) payloads.push(payload);
+        }
+
+        if (payloads.length === 0) {
+          taskRepository.updateTask(activeTask.id, {
+            status: 'failed',
+            error: { message: 'No downloadable image payload found' },
+            durationMs: Date.now() - startedAt,
+          });
+          return { status: 502, data: { error: 'No downloadable image payload found' } };
+        }
+
+        const totalSizeBytes = payloads.reduce((sum, payload) => sum + payload.buffer.length, 0);
+        const limitError = assertAssetStorageQuota({ userId, sizeBytes: totalSizeBytes, uploadLimits, assetRepository });
+        if (limitError) throw toExposedQuotaError(limitError);
+
+        for (const payload of payloads) {
+          if (taskWasCancelled(activeTask.id, taskRepository)) {
+            taskRepository.addTaskLog(activeTask.id, {
+              level: 'warn',
+              event: 'cancelled_after_upstream',
+              message: 'Image upstream request finished after cancellation; output was not written.',
+            });
+            return { status: 409, data: { error: 'Task was cancelled.' } };
+          }
+
+          const asset = await saveGeneratedImage({
+            assetRepository,
+            assetStorage,
+            userId,
+            taskId: activeTask.id,
+            payload,
+            prompt: capabilityResult.body.prompt,
+            model: capabilityResult.body.model,
+            providerId,
+            taskRepository,
+          });
+          if (asset) saved.push(asset);
+        }
+
+        const output = saved.map(publicAsset);
+        if (taskWasCancelled(activeTask.id, taskRepository)) {
+          return { status: 409, data: { error: 'Task was cancelled.' } };
+        }
+
         taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'Base URL is required' },
+          status: 'succeeded',
+          output,
+          error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
           durationMs: Date.now() - startedAt,
         });
-        return { status: 400, data: { error: 'Base URL is required' } };
-      }
-      if (!apiKey) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'API key is required' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 400, data: { error: 'API key is required' } };
-      }
 
-      const {
-        baseUrl: _baseUrl,
-        apiKey: _apiKey,
-        apiKeyId: _apiKeyId,
-        publicBaseUrl: _publicBaseUrl,
-        userId: _userId,
-        providerId: _providerId,
-        upstreamTaskIds: _upstreamTaskIds,
-        ...imageBody
-      } = taskBody;
-
-      const normalizedImageBody = normalizeImageBodyAliases(imageBody);
-      const capabilities = getModelCapabilities(providerId, normalizedImageBody.model);
-      const capabilityResult = filterImageBodyByCapabilities(normalizedImageBody, capabilities);
-
-      if (!capabilityResult.ok) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: capabilityResult.error, warnings: capabilityResult.warnings },
-          durationMs: Date.now() - startedAt,
-        });
         return {
-          status: 400,
-          data: { error: capabilityResult.error, warnings: capabilityResult.warnings },
+          status: 200,
+          data: {
+            ...result.data,
+            data: output,
+            taskId: activeTask.id,
+            warnings: capabilityResult.warnings,
+          },
         };
       }
 
-      const adapter = getImageProviderAdapter(providerId);
-      const request = adapter.buildRequest({
-        apiKey,
-        body: capabilityResult.body,
-        req: workerReq,
-      });
-      const result = await proxyRequest(joinUrl(baseUrl, adapter.endpoint), {
-        method: 'POST',
-        headers: request.headers,
-        body: request.body,
-      });
-
-      if (result.status >= 400) {
-        const upstreamError = safeUpstreamTaskError(result, 'Image generation upstream request failed.');
-        console.error('/api/images upstream error:', {
-          status: result.status,
-          statusText: result.statusText,
-          error: upstreamError,
-        });
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: upstreamError,
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: result.status, data: safeUpstreamErrorData(result, 'Image generation upstream request failed.') };
-      }
-
-      const items = adapter.extractItems(result.data);
-      const payloads = [];
-      const saved = [];
-
-      for (let i = 0; i < items.length; i += 1) {
-        if (taskWasCancelled(activeTask.id, taskRepository)) {
-          taskRepository.addTaskLog(activeTask.id, {
-            level: 'warn',
-            event: 'cancelled_after_upstream',
-            message: 'Image upstream request finished after cancellation; output was not written.',
-          });
-          return { status: 409, data: { error: 'Task was cancelled.' } };
-        }
-
-        const payload = await resolveGeneratedImagePayload(items[i], i);
-        if (payload) payloads.push(payload);
-      }
-
-      if (payloads.length === 0) {
-        taskRepository.updateTask(activeTask.id, {
-          status: 'failed',
-          error: { message: 'No downloadable image payload found' },
-          durationMs: Date.now() - startedAt,
-        });
-        return { status: 502, data: { error: 'No downloadable image payload found' } };
-      }
-
-      const totalSizeBytes = payloads.reduce((sum, payload) => sum + payload.buffer.length, 0);
-      const limitError = assertAssetStorageQuota({ userId, sizeBytes: totalSizeBytes, uploadLimits, assetRepository });
-      if (limitError) throw toExposedQuotaError(limitError);
-
-      for (const payload of payloads) {
-        if (taskWasCancelled(activeTask.id, taskRepository)) {
-          taskRepository.addTaskLog(activeTask.id, {
-            level: 'warn',
-            event: 'cancelled_after_upstream',
-            message: 'Image upstream request finished after cancellation; output was not written.',
-          });
-          return { status: 409, data: { error: 'Task was cancelled.' } };
-        }
-
-        const asset = await saveGeneratedImage({
-          assetRepository,
-          assetStorage,
-          userId,
-          taskId: activeTask.id,
-          payload,
-          prompt: capabilityResult.body.prompt,
-          model: capabilityResult.body.model,
-          providerId,
-          taskRepository,
-        });
-        if (asset) saved.push(asset);
-      }
-
-      const output = saved.map(publicAsset);
-      if (taskWasCancelled(activeTask.id, taskRepository)) {
-        return { status: 409, data: { error: 'Task was cancelled.' } };
-      }
-
       taskRepository.updateTask(activeTask.id, {
-        status: 'succeeded',
-        output,
-        error: capabilityResult.warnings.length > 0 ? { warnings: capabilityResult.warnings } : null,
+        status: 'failed',
+        error: { message: 'No usable credentials found' },
         durationMs: Date.now() - startedAt,
       });
-
-      return {
-        status: 200,
-        data: {
-          ...result.data,
-          data: output,
-          taskId: activeTask.id,
-          warnings: capabilityResult.warnings,
-        },
-      };
+      return { status: 400, data: { error: 'No usable credentials found' } };
     } catch (error) {
       console.error('/api/images task error:', error);
       if (activeTask && !taskWasCancelled(activeTask.id, taskRepository)) {

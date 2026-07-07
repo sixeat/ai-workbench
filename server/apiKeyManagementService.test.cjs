@@ -205,8 +205,10 @@ test('api key management service updates only changed audit flags', () => {
     isEnabled: false,
     name: 'Renamed Key',
   }), {
+    changedAllowedCapabilities: false,
     changedBaseUrl: false,
     changedEnabled: true,
+    changedModels: false,
     changedName: true,
     changedProvider: false,
     changedSecret: false,
@@ -216,6 +218,43 @@ test('api key management service updates only changed audit flags', () => {
     previousProviderId: 'seedance',
     providerId: 'seedance',
   });
+});
+
+test('api key management service persists explicit allowed capability false values', () => {
+  const repository = createRepository([
+    {
+      allowedCapabilities: {
+        chat: true,
+        imageGeneration: true,
+        videoGeneration: true,
+      },
+      id: 'capability-key',
+      keyScope: 'server',
+      ownerUserId: 'local-user',
+      providerId: 'openai-compatible',
+    },
+  ]);
+  const service = createService(repository);
+
+  const response = service.updateApiKey({
+    authUser: { id: 'admin-1', role: 'admin' },
+    body: {
+      allowedCapabilities: {
+        chat: false,
+        imageGeneration: true,
+        videoGeneration: false,
+      },
+    },
+    params: { apiKeyId: 'capability-key' },
+  });
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(repository.apiKeys.get('capability-key').allowedCapabilities, {
+    chat: false,
+    imageGeneration: true,
+    videoGeneration: false,
+  });
+  assert.equal(repository.auditLogs[0].metadata.changedAllowedCapabilities, true);
 });
 
 test('api key management service tests keys and audits success or safe failure', async () => {

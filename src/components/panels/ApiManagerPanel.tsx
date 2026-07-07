@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ComponentType } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
@@ -47,17 +47,23 @@ import {
 } from '../../lib/apiProxy';
 import { summarizeApiKeyTestChecks, summarizeApiKeyTestLimits } from '../../lib/apiKeyTestDisplay';
 import { apiKeyScopeLabel, canManageApiKeyScope, summarizeApiKeyQuota, type ApiKeyQuotaSummary } from '../../lib/apiKeyScopeDisplay';
+import { API_KEY_CAPABILITY_OPTIONS, completeApiKeyAllowedCapabilities, summarizeAllowedCapabilities } from '../../lib/apiInstanceCapabilities';
 import { groupModelCapabilityPresetsByProvider, summarizeModelCapabilityPresetPreview } from '../../lib/modelCapabilityPresetDisplay';
 import { clearModelCapabilityCache } from '../../lib/modelCapabilityCache';
 import { parseOptionalNumberInput, parseOptionalRatioInput } from '../../lib/modelCapabilityForm';
+import type { ApiKeyAllowedCapabilities } from '../../types/api';
 
 interface ApiManagerPanelProps {
   isOpen: boolean;
   onClose: () => void;
+  allowedTabs?: readonly ApiManagerTab[];
   initialTab?: ApiManagerTab;
+  mode?: ApiManagerMode;
+  variant?: 'floating' | 'embedded';
 }
 
 export type ApiManagerTab = 'local' | 'server' | 'capabilities';
+export type ApiManagerMode = 'mixed' | 'workbench-user-keys' | 'admin-server-keys' | 'admin-capabilities';
 
 type KeyTestOptions = {
   model?: string;
@@ -92,6 +98,34 @@ const emptyLocalForm = {
   isEnabled: true,
 };
 
+const defaultServerAllowedCapabilities: ApiKeyAllowedCapabilities = {
+  chat: true,
+  imageGeneration: true,
+  videoGeneration: true,
+};
+
+function serverAllowedCapabilitiesForForm(
+  capabilities?: ApiKeyAllowedCapabilities | null,
+  fallback?: ApiKeyAllowedCapabilities | null
+): ApiKeyAllowedCapabilities {
+  const source = capabilities && Object.keys(capabilities).length > 0 ? capabilities : fallback;
+  return completeApiKeyAllowedCapabilities(source, true);
+}
+
+function hasAllowedCapabilities(capabilities?: Record<string, boolean> | null): boolean {
+  return Boolean(capabilities && Object.keys(capabilities).length > 0);
+}
+
+function mergeApiKeyFromServer(freshKey: ProxyApiKey, currentKey?: ProxyApiKey): ProxyApiKey {
+  if (hasAllowedCapabilities(freshKey.allowedCapabilities) || !hasAllowedCapabilities(currentKey?.allowedCapabilities)) {
+    return freshKey;
+  }
+  return {
+    ...freshKey,
+    allowedCapabilities: currentKey?.allowedCapabilities,
+  };
+}
+
 const emptyServerForm = {
   id: '',
   name: '',
@@ -99,10 +133,33 @@ const emptyServerForm = {
   keyScope: 'server' as 'user' | 'server',
   baseUrl: '',
   apiKey: '',
+  models: [] as string[],
+  allowedCapabilities: { ...defaultServerAllowedCapabilities },
   hasExistingKey: false,
   isEnabled: true,
   testModel: '',
 };
+
+type ServerKeyForm = typeof emptyServerForm;
+
+function apiKeyToServerForm(
+  key: ProxyApiKey,
+  fallback?: Partial<ServerKeyForm>
+): ServerKeyForm {
+  return {
+    id: key.id,
+    name: key.name || key.providerId,
+    providerId: key.providerId,
+    keyScope: key.keyScope,
+    baseUrl: key.baseUrl || '',
+    apiKey: '',
+    models: [...(key.models || [])],
+    allowedCapabilities: serverAllowedCapabilitiesForForm(key.allowedCapabilities, fallback?.allowedCapabilities),
+    hasExistingKey: true,
+    isEnabled: key.isEnabled,
+    testModel: fallback?.testModel || '',
+  };
+}
 
 const SERVER_KEY_PAGE_SIZE = 80;
 const CAPABILITY_PAGE_SIZE = 80;
@@ -133,7 +190,7 @@ function toErrorMessage(error: unknown, fallback: string): string {
 }
 
 function apiKeyScopeUiLabel(scope?: string): string {
-  return scope === 'user' ? '自定义 Key' : apiKeyScopeLabel(scope);
+  return scope === 'user' ? '我的 API' : apiKeyScopeLabel(scope);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -162,7 +219,14 @@ function mergeById<T extends { id: string }>(current: T[], next: T[]): T[] {
   return [...items.values()];
 }
 
-export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiManagerPanelProps) {
+export function ApiManagerPanel({
+  allowedTabs,
+  initialTab = 'server',
+  isOpen,
+  mode,
+  onClose,
+  variant = 'floating',
+}: ApiManagerPanelProps) {
   const { instances, addInstance, removeInstance, updateInstance, setDeploymentMode, syncServerKeyInstances } = useApiStore();
   const [tab, setTab] = useState<ApiManagerTab>(initialTab);
   const [searchQuery, setSearchQuery] = useState('');
@@ -187,6 +251,8 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
   const [loadingMoreCapabilities, setLoadingMoreCapabilities] = useState(false);
   const [modelLoading, setModelLoading] = useState(false);
   const [testingKey, setTestingKey] = useState(false);
+  const [savingCapabilities, setSavingCapabilities] = useState(false);
+  const [autoSaveServerCapabilities] = useState(false);
   const [keyTestResult, setKeyTestResult] = useState<ProxyApiKeyTestResult | null>(null);
   const [authInfo, setAuthInfo] = useState<ProxyAuthMe | null>(null);
   const [notice, setNotice] = useState('');
@@ -194,6 +260,32 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
 
   const isServerMode = authInfo?.deploymentMode === 'server';
   const canManageServerKeys = authInfo?.user?.role === 'admin';
+  const isEmbedded = variant === 'embedded';
+  const resolvedMode: ApiManagerMode = mode
+    || (allowedTabs?.length === 1 && allowedTabs[0] === 'capabilities'
+      ? 'admin-capabilities'
+      : 'mixed');
+  const workbenchUserKeysOnly = resolvedMode === 'workbench-user-keys';
+  const adminServerKeysOnly = resolvedMode === 'admin-server-keys';
+  const adminCapabilitiesOnly = resolvedMode === 'admin-capabilities';
+  const apiKeyQueryScope = workbenchUserKeysOnly ? 'user' : adminServerKeysOnly ? 'server' : undefined;
+  const keyPanelLabel = workbenchUserKeysOnly ? '我的 API' : adminServerKeysOnly ? '服务器 Key' : '后端 Key';
+
+  const visibleTabs = useMemo<ApiManagerTab[]>(() => {
+    if (workbenchUserKeysOnly || adminServerKeysOnly) return ['server'];
+    if (adminCapabilitiesOnly) return ['capabilities'];
+    const candidates: ApiManagerTab[] = [
+      ...(!isServerMode ? ['local' as const] : []),
+      'server',
+      'capabilities',
+    ];
+    return allowedTabs?.length ? candidates.filter((item) => allowedTabs.includes(item)) : candidates;
+  }, [adminCapabilitiesOnly, adminServerKeysOnly, allowedTabs, isServerMode, workbenchUserKeysOnly]);
+
+  const normalizeTab = useCallback((nextTab: ApiManagerTab): ApiManagerTab => {
+    if (visibleTabs.includes(nextTab)) return nextTab;
+    return visibleTabs[0] || 'server';
+  }, [visibleTabs]);
 
   const filteredInstances = useMemo(() => {
     const query = searchQuery.toLowerCase();
@@ -214,7 +306,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
     return groups;
   }, [filteredInstances]);
 
-  const loadServerData = async () => {
+  const loadServerData = async (apiKeyOverride?: ProxyApiKey) => {
     setLoading(true);
     setError('');
     const search = searchQuery.trim();
@@ -222,7 +314,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
       const [authData, providersData, keysData, capabilityData, presetData] = await Promise.all([
         proxyAuthMe().catch(() => null),
         proxyListProviders(),
-        proxyListApiKeys({ limit: SERVER_KEY_PAGE_SIZE, offset: 0, search }),
+        proxyListApiKeys({ limit: SERVER_KEY_PAGE_SIZE, offset: 0, search, keyScope: apiKeyQueryScope }),
         proxyListModelCapabilities({ limit: CAPABILITY_PAGE_SIZE, offset: 0, search }),
         proxyListModelCapabilityPresets(),
       ]);
@@ -237,11 +329,25 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
         setSelectedInstanceId(null);
       }
 
+      const currentKeyById = new Map(serverKeys.map((key) => [key.id, key]));
+      if (apiKeyOverride) currentKeyById.set(apiKeyOverride.id, apiKeyOverride);
+      const mergedApiKeys = keysData.apiKeys.map((key) => mergeApiKeyFromServer(key, currentKeyById.get(key.id)));
+
       setProviderTemplates(providersData.providers);
-      setServerKeys(keysData.apiKeys);
+      setServerKeys(mergedApiKeys);
+      setServerForm((current) => {
+        if (!current.id) return current;
+        const freshKey = mergedApiKeys.find((key) => key.id === current.id);
+        return freshKey
+          ? apiKeyToServerForm(freshKey, {
+            allowedCapabilities: current.allowedCapabilities,
+            testModel: current.testModel,
+          })
+          : current;
+      });
       setServerKeyTotal(keysData.total ?? keysData.count);
       setApiKeyQuota(keysData.quota || null);
-      syncServerKeyInstances(keysData.apiKeys, {
+      syncServerKeyInstances(mergedApiKeys, {
         replaceMissing: !search && (keysData.total ?? keysData.count) <= keysData.apiKeys.length,
       });
       setCapabilities(capabilityData.capabilities);
@@ -294,13 +400,18 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
         limit: SERVER_KEY_PAGE_SIZE,
         offset: serverKeys.length,
         search: searchQuery.trim(),
+        keyScope: apiKeyQueryScope,
       });
-      setServerKeys((current) => mergeById(current, data.apiKeys));
+      setServerKeys((current) => {
+        const currentKeyById = new Map(current.map((key) => [key.id, key]));
+        const mergedApiKeys = data.apiKeys.map((key) => mergeApiKeyFromServer(key, currentKeyById.get(key.id)));
+        return mergeById(current, mergedApiKeys);
+      });
       setServerKeyTotal(data.total ?? data.count);
       setApiKeyQuota(data.quota || null);
       syncServerKeyInstances(data.apiKeys);
     } catch (err) {
-      setError(toErrorMessage(err, '更多后端 Key 加载失败'));
+      setError(toErrorMessage(err, `更多${keyPanelLabel}加载失败`));
     } finally {
       setLoadingMoreServerKeys(false);
     }
@@ -326,10 +437,20 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
 
   useEffect(() => {
     if (!isOpen) return;
-    setTab(initialTab);
-  }, [initialTab, isOpen]);
+    setTab(normalizeTab(initialTab));
+  }, [initialTab, isOpen, normalizeTab]);
+
+  useEffect(() => {
+    if (!visibleTabs.includes(tab)) {
+      setTab(normalizeTab(tab));
+    }
+  }, [normalizeTab, tab, visibleTabs]);
 
   const switchTab = (nextTab: ApiManagerTab) => {
+    if (!visibleTabs.includes(nextTab)) {
+      setTab(normalizeTab(nextTab));
+      return;
+    }
     if (isServerMode && nextTab === 'local') {
       setTab('server');
       setError('服务器模式只使用后端托管 Key。本地浏览器 Key 已禁用。');
@@ -460,36 +581,61 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
 
   const selectServerKey = (key: ProxyApiKey) => {
     switchTab('server');
-    setServerForm({
-      id: key.id,
-      name: key.name || key.providerId,
-      providerId: key.providerId,
-      keyScope: key.keyScope,
-      baseUrl: key.baseUrl || '',
-      apiKey: '',
-      hasExistingKey: true,
-      isEnabled: key.isEnabled,
-      testModel: '',
-    });
+    setServerForm(apiKeyToServerForm(key, { testModel: serverForm.id === key.id ? serverForm.testModel : '' }));
     setKeyTestResult(null);
+  };
+
+  const updateServerForm = (patch: Partial<ServerKeyForm>) => {
+    const nextForm = { ...serverForm, ...patch };
+    setServerForm(nextForm);
+
+    if (!autoSaveServerCapabilities) return;
+    if (!patch.allowedCapabilities || !serverForm.id) return;
+    if (!canManageApiKeyScope(serverForm.keyScope, canManageServerKeys)) return;
+
+    setSavingCapabilities(true);
+    setError('');
+    void proxyUpdateApiKey(serverForm.id, {
+      allowedCapabilities: patch.allowedCapabilities,
+    })
+      .then(({ apiKey }) => {
+        const savedForm = apiKeyToServerForm(apiKey, nextForm);
+        setServerKeys((current) => current.map((item) => item.id === apiKey.id ? apiKey : item));
+        setServerForm((current) => current.id === apiKey.id ? { ...current, allowedCapabilities: savedForm.allowedCapabilities } : current);
+        void loadServerData();
+        setNotice('允许用途已自动保存');
+      })
+      .catch((err: unknown) => {
+        setError(toErrorMessage(err, '保存允许用途失败'));
+      })
+      .finally(() => {
+        setSavingCapabilities(false);
+      });
   };
 
   const startAddServerKey = (keyScope?: 'user' | 'server') => {
     switchTab('server');
-    setServerForm({ ...emptyServerForm, keyScope: keyScope || (canManageServerKeys ? 'server' : 'user') });
+    const nextScope = adminServerKeysOnly ? 'server' : workbenchUserKeysOnly ? 'user' : keyScope || (canManageServerKeys ? 'server' : 'user');
+    setServerForm({
+      ...emptyServerForm,
+      allowedCapabilities: serverAllowedCapabilitiesForForm(),
+      keyScope: nextScope,
+      models: [],
+    });
     setKeyTestResult(null);
   };
 
   const saveServerKey = async () => {
+    const effectiveKeyScope = adminServerKeysOnly ? 'server' : workbenchUserKeysOnly ? 'user' : serverForm.keyScope;
     if (!serverForm.name || !serverForm.providerId) {
       setError('请填写名称和 Provider。');
       return;
     }
     if (!serverForm.id && !serverForm.apiKey) {
-      setError('新增后端 Key 时必须填写 API Key。');
+      setError(`新增${keyPanelLabel}时必须填写 API Key。`);
       return;
     }
-    if (!canManageApiKeyScope(serverForm.keyScope, canManageServerKeys)) {
+    if (!canManageApiKeyScope(effectiveKeyScope, canManageServerKeys)) {
       setError('只有管理员可以创建或修改服务器共享 Key。普通用户请保存自定义 Key。');
       return;
     }
@@ -503,55 +649,58 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
           name: serverForm.name,
           providerId: serverForm.providerId,
           baseUrl: serverForm.baseUrl,
+          models: serverForm.models,
+          allowedCapabilities: serverForm.allowedCapabilities,
           isEnabled: serverForm.isEnabled,
           ...(serverForm.apiKey ? { apiKey: serverForm.apiKey } : {}),
         });
         savedKey = data.apiKey;
       } else {
         const data = await proxySaveApiKey({
-          keyScope: serverForm.keyScope,
+          keyScope: effectiveKeyScope,
           providerId: serverForm.providerId,
           name: serverForm.name,
           baseUrl: serverForm.baseUrl,
           apiKey: serverForm.apiKey,
+          models: serverForm.models,
+          allowedCapabilities: serverForm.allowedCapabilities,
           isEnabled: serverForm.isEnabled,
         });
         savedKey = data.apiKey;
       }
 
-      await loadServerData();
-      setServerForm({
-        id: savedKey.id,
-        name: savedKey.name || savedKey.providerId,
-        providerId: savedKey.providerId,
-        keyScope: savedKey.keyScope,
-        baseUrl: savedKey.baseUrl || '',
-        apiKey: '',
-        hasExistingKey: true,
-        isEnabled: savedKey.isEnabled,
-        testModel: serverForm.testModel,
+      const nextForm = apiKeyToServerForm(savedKey, serverForm);
+      setServerKeys((current) => {
+        const exists = current.some((item) => item.id === savedKey.id);
+        return exists
+          ? current.map((item) => item.id === savedKey.id ? savedKey : item)
+          : [savedKey, ...current];
       });
-      setNotice('后端 Key 已保存，可以继续测试模型能力');
+      setServerForm(nextForm);
+      await loadServerData(savedKey);
+      setNotice(`${keyPanelLabel}已保存，可以继续测试模型能力`);
     } catch (err) {
-      setError(toErrorMessage(err, '保存后端 Key 失败'));
+      setError(toErrorMessage(err, `保存${keyPanelLabel}失败`));
     } finally {
       setLoading(false);
     }
   };
 
   const deleteServerKey = async (id: string) => {
-    if (!window.confirm('确定删除这个后端 Key 吗？')) return;
+    const target = serverKeys.find((key) => key.id === id);
+    if (!window.confirm(`确定删除${keyPanelLabel}「${target?.name || target?.providerId || id}」吗？`)) return;
 
     setLoading(true);
     setError('');
     try {
       await proxyDeleteApiKey(id);
+      removeInstance(`user:${id}`);
       removeInstance(`server:${id}`);
       await loadServerData();
       setServerForm(emptyServerForm);
-      setNotice('后端 Key 已删除');
+      setNotice(`${keyPanelLabel}已删除`);
     } catch (err) {
-      setError(toErrorMessage(err, '删除后端 Key 失败'));
+      setError(toErrorMessage(err, `删除${keyPanelLabel}失败`));
     } finally {
       setLoading(false);
     }
@@ -559,7 +708,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
 
   const testServerKey = async (options: KeyTestOptions = {}) => {
     if (!serverForm.id) {
-      setError('请先保存后端 Key，再测试。');
+      setError(`请先保存${keyPanelLabel}，再测试。`);
       return;
     }
 
@@ -581,6 +730,30 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
       setError(toErrorMessage(err, 'Key 测试失败'));
     } finally {
       setTestingKey(false);
+    }
+  };
+
+  const fetchServerModels = async () => {
+    if (!serverForm.id) {
+      setError(`请先保存${keyPanelLabel}，再获取模型列表。`);
+      return;
+    }
+
+    setModelLoading(true);
+    setError('');
+    try {
+      const { result } = await proxyTestApiKey(serverForm.id, {
+        providerId: serverForm.providerId,
+        model: serverForm.testModel.trim() || undefined,
+      });
+      const models = result.models.models.map((model) => model.id);
+      setServerForm((current) => ({ ...current, models }));
+      setKeyTestResult(result);
+      setNotice(`获取到 ${models.length} 个模型，请保存 Key 后生效`);
+    } catch (err) {
+      setError(toErrorMessage(err, '获取服务器模型列表失败'));
+    } finally {
+      setModelLoading(false);
     }
   };
 
@@ -640,38 +813,54 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
 
   if (!isOpen) return null;
 
-  return (
-    <FloatingWindow contentClassName="h-[82vh] w-[980px] flex-col">
+  const content = (
+    <>
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
           <div className="flex min-w-0 items-center gap-2">
             <Key className="h-4 w-4 shrink-0 text-accent" />
-            <h2 className="text-sm font-semibold text-white">API 与模型能力</h2>
+            <h2 className="text-sm font-semibold text-white">
+              {workbenchUserKeysOnly ? '我的 API' : adminServerKeysOnly ? '服务器 Key' : adminCapabilitiesOnly ? '模型能力' : 'API 与模型能力'}
+            </h2>
             {authInfo && (
               <span className="rounded bg-blue-500/10 px-2 py-0.5 text-[10px] text-blue-300">
-                {isServerMode ? '服务器模式：后端 Key 管理' : '本地模式：支持临时 Key'}
+                {workbenchUserKeysOnly
+                  ? '工作台：只管理个人 Key'
+                  : adminServerKeysOnly
+                    ? '管理员：平台托管 Key'
+                    : isServerMode
+                      ? '服务器模式：后端 Key 管理'
+                      : '本地模式：支持临时 Key'}
               </span>
             )}
             {notice && <span className="truncate rounded bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300">{notice}</span>}
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={loadServerData} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="刷新">
+            <button onClick={() => void loadServerData()} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="刷新">
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
             </button>
-            <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="关闭">
-              <X className="h-4 w-4" />
-            </button>
+            {!isEmbedded && (
+              <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="关闭">
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
         {error && <div className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-xs text-red-300">{error}</div>}
 
-        <div className="flex border-b border-panel-border px-3 py-2">
-          {!isServerMode && (
-            <TabButton active={tab === 'local'} icon={Laptop} label="本地 Key" count={filteredInstances.length} onClick={() => switchTab('local')} />
+        {visibleTabs.length > 1 && (
+          <div className="flex border-b border-panel-border px-3 py-2">
+            {visibleTabs.includes('local') && (
+              <TabButton active={tab === 'local'} icon={Laptop} label="本地 Key" count={filteredInstances.length} onClick={() => switchTab('local')} />
+            )}
+            {visibleTabs.includes('server') && (
+              <TabButton active={tab === 'server'} icon={Cloud} label={keyPanelLabel} count={serverKeyCount} onClick={() => switchTab('server')} />
+            )}
+            {visibleTabs.includes('capabilities') && (
+              <TabButton active={tab === 'capabilities'} icon={ShieldCheck} label="模型能力" count={capabilityCount} onClick={() => switchTab('capabilities')} />
+            )}
+          </div>
           )}
-          <TabButton active={tab === 'server'} icon={Cloud} label="后端 Key" count={serverKeyCount} onClick={() => switchTab('server')} />
-          <TabButton active={tab === 'capabilities'} icon={ShieldCheck} label="模型能力" count={capabilityCount} onClick={() => switchTab('capabilities')} />
-        </div>
 
         <div className="flex min-h-0 flex-1">
           <div className="flex w-80 flex-col border-r border-panel-border bg-canvas-bg/50">
@@ -681,7 +870,7 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
                 <input
                   value={searchQuery}
                   onChange={(event) => setSearchQuery(event.target.value)}
-                  placeholder={tab === 'local' ? '搜索本地 API...' : tab === 'server' ? '搜索后端 Key...' : '搜索模型能力...'}
+                  placeholder={tab === 'local' ? '搜索本地 API...' : tab === 'server' ? `搜索${keyPanelLabel}...` : '搜索模型能力...'}
                   className="w-full rounded-md border border-panel-border bg-panel-bg py-1.5 pl-8 pr-3 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
                 />
               </div>
@@ -703,6 +892,8 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
                   total={serverKeyCount}
                   quota={apiKeyQuota}
                   canManageServerKeys={canManageServerKeys}
+                  serverOnly={adminServerKeysOnly}
+                  userOnly={workbenchUserKeysOnly}
                   loadingMore={loadingMoreServerKeys}
                   hasMore={hasMoreServerKeys}
                   onAdd={startAddServerKey}
@@ -759,13 +950,20 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
                 form={serverForm}
                 showKey={showKey}
                 loading={loading}
+                modelLoading={modelLoading}
                 testing={testingKey}
+                savingCapabilities={savingCapabilities}
                 testResult={keyTestResult}
                 canManageServerKeys={canManageServerKeys}
+                serverOnly={adminServerKeysOnly}
+                userOnly={workbenchUserKeysOnly}
                 quota={apiKeyQuota}
                 onToggleKey={() => setShowKey(!showKey)}
-                onChange={(patch) => setServerForm((prev) => ({ ...prev, ...patch }))}
+                onChange={updateServerForm}
                 onSave={saveServerKey}
+                onFetchModels={fetchServerModels}
+                onAddModel={(model) => setServerForm((prev) => ({ ...prev, models: prev.models.includes(model) ? prev.models : [...prev.models, model] }))}
+                onRemoveModel={(model) => setServerForm((prev) => ({ ...prev, models: prev.models.filter((item) => item !== model) }))}
                 onTest={testServerKey}
                 onDelete={() => serverForm.id && void deleteServerKey(serverForm.id)}
               />
@@ -787,6 +985,20 @@ export function ApiManagerPanel({ isOpen, onClose, initialTab = 'server' }: ApiM
             )}
           </div>
         </div>
+    </>
+  );
+
+  if (isEmbedded) {
+    return (
+      <section className="flex h-full min-h-[720px] flex-col overflow-hidden rounded-xl border border-panel-border bg-[#0c0f12]">
+        {content}
+      </section>
+    );
+  }
+
+  return (
+    <FloatingWindow contentClassName="h-[82vh] w-[980px] flex-col">
+      {content}
     </FloatingWindow>
   );
 }
@@ -862,6 +1074,8 @@ function ServerKeyList(props: {
   total: number;
   quota: ApiKeyQuotaSummary | null;
   canManageServerKeys: boolean;
+  serverOnly: boolean;
+  userOnly: boolean;
   loadingMore: boolean;
   hasMore: boolean;
   onAdd: (keyScope?: 'user' | 'server') => void;
@@ -870,37 +1084,60 @@ function ServerKeyList(props: {
 }) {
   const serverKeys = props.keys.filter((key) => key.keyScope === 'server');
   const customKeys = props.keys.filter((key) => key.keyScope !== 'server');
+  const shownKeys = props.serverOnly ? serverKeys : props.userOnly ? customKeys : props.keys;
+  const shownTotal = props.serverOnly
+    ? props.total || serverKeys.length
+    : props.userOnly
+      ? props.total || customKeys.length
+      : props.total;
 
   return (
     <section className="space-y-3">
       <div>
-        <h3 className="text-[11px] font-semibold text-gray-400">后端 Key {props.keys.length}/{props.total}</h3>
-        <p className="mt-1 text-[10px] leading-4 text-gray-600">服务器共享和自定义 Key 分开管理。</p>
+        <h3 className="text-[11px] font-semibold text-gray-400">
+          {props.serverOnly ? '服务器 Key' : props.userOnly ? '我的 API' : '后端 Key'} {shownKeys.length}/{shownTotal}
+        </h3>
+        <p className="mt-1 text-[10px] leading-4 text-gray-600">
+          {props.serverOnly
+            ? '这里只维护平台统一托管的共享 Key。'
+            : props.userOnly
+              ? '这里只管理你自己的 API。平台模型由管理员发布，运行时扣积分。'
+              : '服务器共享和自定义 Key 分开管理。'}
+        </p>
       </div>
-      {props.keys.length === 0 ? (
-        <div className="grid gap-3">
+      {props.userOnly ? (
+        <div className="space-y-3">
           <ServerKeySection
-            title="服务器"
-            description="平台统一托管的共享 Key。"
-            emptyText="暂无服务器 Key。"
+            title="我的 API"
+            description="你自己添加的第三方 API Key。当前版本使用个人 Key 不扣平台积分。"
+            emptyText="暂无我的 API。点击 + 添加。"
+            keys={customKeys}
+            selectedId={props.selectedId}
+            onAdd={() => props.onAdd('user')}
+            onSelect={props.onSelect}
+          />
+          {props.hasMore && (
+            <LoadMoreButton loading={props.loadingMore} onClick={props.onLoadMore}>
+              加载更多我的 API
+            </LoadMoreButton>
+          )}
+        </div>
+      ) : props.serverOnly ? (
+        <div className="space-y-3">
+          <ServerKeySection
+            title="服务器共享 Key"
+            description="管理员统一托管，普通用户工作流可按权限使用。"
+            emptyText={props.canManageServerKeys ? '暂无服务器 Key。点击 + 添加服务器共享 Key。' : '暂无服务器 Key。'}
             keys={serverKeys}
             selectedId={props.selectedId}
             onAdd={props.canManageServerKeys ? () => props.onAdd('server') : undefined}
             onSelect={props.onSelect}
           />
-          <ServerKeySection
-            title="自定义"
-            description="你自己添加的第三方 API Key。"
-            emptyText="暂无自定义 Key。"
-            keys={customKeys}
-            selectedId={props.selectedId}
-            onAdd={() => props.onAdd('user')}
-            onSelect={props.onSelect}
-          >
-            <div className="mb-2 rounded-lg border border-panel-border bg-panel-bg px-2.5 py-2 text-[10px] leading-4 text-gray-500">
-              {summarizeApiKeyQuota(props.quota)}
-            </div>
-          </ServerKeySection>
+          {props.hasMore && (
+            <LoadMoreButton loading={props.loadingMore} onClick={props.onLoadMore}>
+              加载更多服务器 Key
+            </LoadMoreButton>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -1015,6 +1252,16 @@ function ServerKeyItem({
       </div>
       <div className="mt-1 text-[10px] text-gray-500">
         {item.providerId} · {item.isEnabled ? '启用' : '停用'}
+      </div>
+      <div className="mt-2 flex flex-wrap gap-1">
+        <span className="rounded bg-accent/10 px-1.5 py-0.5 text-[9px] text-accent">
+          {summarizeAllowedCapabilities(item.allowedCapabilities)}
+        </span>
+        {Boolean(item.models?.length) && (
+          <span className="rounded bg-panel-bg px-1.5 py-0.5 text-[9px] text-gray-400">
+            {item.models?.length} 个模型
+          </span>
+        )}
       </div>
     </button>
   );
@@ -1176,18 +1423,27 @@ function ServerKeyEditor(props: {
   form: typeof emptyServerForm;
   showKey: boolean;
   loading: boolean;
+  modelLoading: boolean;
   testing: boolean;
+  savingCapabilities: boolean;
   testResult: ProxyApiKeyTestResult | null;
   canManageServerKeys: boolean;
+  serverOnly: boolean;
+  userOnly: boolean;
   quota: ApiKeyQuotaSummary | null;
   onToggleKey: () => void;
   onChange: (patch: Partial<typeof emptyServerForm>) => void;
   onSave: () => void;
+  onFetchModels: () => void;
+  onAddModel: (model: string) => void;
+  onRemoveModel: (model: string) => void;
   onTest: (options?: KeyTestOptions) => void;
   onDelete: () => void;
 }) {
-  const canManageCurrentKey = canManageApiKeyScope(props.form.keyScope, props.canManageServerKeys);
-  const isReadOnlyServerKey = props.form.keyScope === 'server' && !props.canManageServerKeys;
+  const effectiveKeyScope = props.userOnly ? 'user' : props.form.keyScope;
+  const canManageCurrentKey = canManageApiKeyScope(effectiveKeyScope, props.canManageServerKeys);
+  const isReadOnlyServerKey = effectiveKeyScope === 'server' && !props.canManageServerKeys;
+  const currentKeyLabel = props.userOnly ? '我的 API' : apiKeyScopeUiLabel(props.form.keyScope);
 
   if (isReadOnlyServerKey) {
     return (
@@ -1201,34 +1457,55 @@ function ServerKeyEditor(props: {
     <div className="space-y-4">
       <PanelTitle
         icon={Cloud}
-        title={props.form.id ? `编辑${apiKeyScopeUiLabel(props.form.keyScope)}` : '新增后端 Key'}
-        description="Key 会加密保存到后端。自定义 Key 只属于当前账号，服务器共享 Key 由管理员统一托管。"
+        title={props.form.id ? `编辑${currentKeyLabel}` : props.userOnly ? '新增我的 API' : props.serverOnly ? '新增服务器共享 Key' : '新增后端 Key'}
+        description={props.userOnly ? 'Key 会加密保存到后端，只属于当前账号。使用我的 API 时当前不扣平台积分。' : props.serverOnly ? 'Key 会加密保存到后端，由管理员统一托管给平台使用。' : 'Key 会加密保存到后端。自定义 Key 只属于当前账号，服务器共享 Key 由管理员统一托管。'}
       />
-      <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3 text-[11px] leading-5 text-gray-500">
-        {summarizeApiKeyQuota(props.quota)}
-      </div>
-      <div className="grid grid-cols-2 gap-3">
-        <button
-          disabled={!props.canManageServerKeys}
-          onClick={() => props.onChange({ keyScope: 'server' })}
-          className={cn(
-            'rounded-lg border p-3 text-left',
-            props.form.keyScope === 'server' ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg',
-            !props.canManageServerKeys && 'cursor-not-allowed opacity-50'
-          )}
-        >
-          <div className="text-xs font-medium text-white">服务器共享 Key</div>
-          <div className="mt-1 text-[10px] text-gray-500">管理员统一托管，适合给朋友共用。</div>
-        </button>
-        <button
-          onClick={() => props.onChange({ keyScope: 'user' })}
-          className={cn('rounded-lg border p-3 text-left', props.form.keyScope === 'user' ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg')}
-        >
-          <div className="text-xs font-medium text-white">自定义 Key</div>
-          <div className="mt-1 text-[10px] text-gray-500">登录用户自带，只自己可管理和使用。</div>
-        </button>
-      </div>
+      {props.userOnly && (
+        <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3 text-[11px] leading-5 text-gray-500">
+          {summarizeApiKeyQuota(props.quota)}
+        </div>
+      )}
+      {!props.serverOnly && !props.userOnly && (
+        <>
+          <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3 text-[11px] leading-5 text-gray-500">
+            {summarizeApiKeyQuota(props.quota)}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              disabled={!props.canManageServerKeys}
+              onClick={() => props.onChange({ keyScope: 'server' })}
+              className={cn(
+                'rounded-lg border p-3 text-left',
+                props.form.keyScope === 'server' ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg',
+                !props.canManageServerKeys && 'cursor-not-allowed opacity-50'
+              )}
+            >
+              <div className="text-xs font-medium text-white">服务器共享 Key</div>
+              <div className="mt-1 text-[10px] text-gray-500">管理员统一托管，适合给朋友共用。</div>
+            </button>
+            <button
+              onClick={() => props.onChange({ keyScope: 'user' })}
+              className={cn('rounded-lg border p-3 text-left', props.form.keyScope === 'user' ? 'border-accent bg-accent/10' : 'border-panel-border bg-panel-bg')}
+            >
+              <div className="text-xs font-medium text-white">自定义 Key</div>
+              <div className="mt-1 text-[10px] text-gray-500">登录用户自带，只自己可管理和使用。</div>
+            </button>
+          </div>
+        </>
+      )}
       <ApiBasicFields form={props.form} showKey={props.showKey} onToggleKey={props.onToggleKey} onChange={props.onChange} />
+      <ModelListEditor
+        models={props.form.models}
+        loading={props.modelLoading}
+        onFetch={props.onFetchModels}
+        onAdd={props.onAddModel}
+        onRemove={props.onRemoveModel}
+      />
+      <ApiKeyCapabilitySelector
+        saving={props.savingCapabilities}
+        value={props.form.allowedCapabilities}
+        onChange={(allowedCapabilities) => props.onChange({ allowedCapabilities })}
+      />
       <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3">
         <label className="mb-1 block text-[10px] text-gray-500">测试模型</label>
         <input
@@ -1242,8 +1519,8 @@ function ServerKeyEditor(props: {
         </p>
       </div>
       <SwitchRow
-        label={`启用${apiKeyScopeUiLabel(props.form.keyScope)}`}
-        description={props.form.keyScope === 'user' ? '关闭后，节点不会再使用这个自定义 Key。' : '关闭后，普通用户不会再使用这个服务器 Key。'}
+        label={`启用${currentKeyLabel}`}
+        description={effectiveKeyScope === 'user' ? '关闭后，节点不会再使用这个个人 Key。' : '关闭后，普通用户不会再使用这个服务器 Key。'}
         checked={props.form.isEnabled}
         onChange={(value) => props.onChange({ isEnabled: value })}
       />
@@ -1251,10 +1528,10 @@ function ServerKeyEditor(props: {
         <button
           onClick={props.onSave}
           disabled={props.loading || !canManageCurrentKey}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50"
+          className="admin-save-button flex flex-1 items-center justify-center gap-1.5 rounded-md px-4 py-2 text-xs font-medium text-white disabled:opacity-50"
         >
           {props.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
-          保存{apiKeyScopeUiLabel(props.form.keyScope)}
+          保存{currentKeyLabel}
         </button>
         {props.form.id && (
           <button onClick={() => props.onTest()} disabled={props.testing} className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:opacity-50">
@@ -1321,11 +1598,63 @@ function ReadOnlyServerKeyDetails({
         <ReadOnlyField label="Provider" value={provider ? `${provider.name} - ${provider.description}` : form.providerId} />
         <ReadOnlyField label="Base URL" value={form.baseUrl || provider?.defaultBaseUrl || '-'} />
         <ReadOnlyField label="状态" value={form.isEnabled ? '启用' : '停用'} />
+        <ReadOnlyField label="允许用途" value={summarizeAllowedCapabilities(form.allowedCapabilities)} />
+        <ReadOnlyField label="模型数量" value={form.models.length ? `${form.models.length} 个模型` : '未保存模型列表'} />
         <ReadOnlyField label="API Key" value="由管理员加密托管，普通用户不可查看或修改" />
       </div>
 
       <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3 text-[11px] leading-5 text-gray-500">
         连接测试、密钥更新和启停操作需要管理员权限。你可以在工作流节点里直接选择平台模型使用。
+      </div>
+    </div>
+  );
+}
+
+function ApiKeyCapabilitySelector({
+  onChange,
+  saving,
+  value,
+}: {
+  onChange: (value: ApiKeyAllowedCapabilities) => void;
+  saving: boolean;
+  value: ApiKeyAllowedCapabilities;
+}) {
+  return (
+    <div className="rounded-xl border border-panel-border bg-canvas-bg/50 p-3">
+      <div className="mb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-xs font-semibold text-white">允许用途</div>
+          {saving && <div className="text-[10px] text-emerald-300">保存中...</div>}
+        </div>
+        <div className="mt-1 text-[10px] leading-4 text-gray-500">
+          用来限制这个 Key 可以被哪些工作流节点使用。比如只勾选“图片”，它就不会出现在文本节点里。
+        </div>
+      </div>
+      <div className="grid gap-2 md:grid-cols-3">
+        {API_KEY_CAPABILITY_OPTIONS.map((item) => {
+          const checked = Boolean(value[item.key]);
+          return (
+            <button
+              key={item.key}
+              type="button"
+              aria-pressed={checked}
+              disabled={saving}
+              onClick={() => onChange({ ...value, [item.key]: !checked })}
+              className={cn(
+                'rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-70',
+                checked
+                  ? 'border-emerald-400/80 bg-emerald-500/15 shadow-[0_0_0_1px_rgba(52,211,153,0.25)]'
+                  : 'border-panel-border bg-panel-bg opacity-55 hover:border-gray-600 hover:opacity-100'
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className={cn('text-xs font-medium', checked ? 'text-emerald-100' : 'text-gray-400')}>{item.label}</span>
+                <span className={cn('h-3 w-3 rounded-full border', checked ? 'border-emerald-200 bg-emerald-400' : 'border-gray-600 bg-transparent')} />
+              </div>
+              <div className={cn('mt-1 text-[10px] leading-4', checked ? 'text-emerald-100/70' : 'text-gray-600')}>{item.description}</div>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1932,9 +2261,13 @@ function ModelListEditor(props: {
   onAdd: (model: string) => void;
   onRemove: (model: string) => void;
 }) {
+  const [newModel, setNewModel] = useState('');
+
   const addModel = () => {
-    const model = window.prompt('输入模型名称');
-    if (model?.trim()) props.onAdd(model.trim());
+    const model = newModel.trim();
+    if (!model) return;
+    props.onAdd(model);
+    setNewModel('');
   };
 
   return (
@@ -1946,11 +2279,27 @@ function ModelListEditor(props: {
             {props.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
             自动获取
           </button>
-          <button onClick={addModel} className="flex items-center gap-1 rounded px-2 py-1 text-[10px] text-accent hover:bg-accent/10">
-            <Plus className="h-3 w-3" />
-            手动添加
-          </button>
         </div>
+      </div>
+      <div className="flex gap-2">
+        <input
+          value={newModel}
+          onChange={(event) => setNewModel(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') addModel();
+          }}
+          className="min-w-0 flex-1 rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-[10px] text-white placeholder-gray-600 focus:border-accent focus:outline-none"
+          placeholder="输入模型名称，例如 gpt-4o"
+        />
+        <button
+          type="button"
+          onClick={addModel}
+          disabled={!newModel.trim()}
+          className="inline-flex items-center gap-1 rounded-md border border-panel-border px-2.5 py-1.5 text-[10px] text-gray-300 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Plus className="h-3 w-3" />
+          添加
+        </button>
       </div>
       <div className="flex max-h-36 flex-wrap gap-1.5 overflow-auto rounded-lg border border-panel-border bg-canvas-bg/40 p-2">
         {props.models.length === 0 ? (

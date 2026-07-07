@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, ClipboardList, Cloud, Coins, Database, FolderOpen, Key, Loader2, RefreshCw, Search, Server, ShieldCheck, SlidersHorizontal, UserPlus, X } from 'lucide-react';
+import { Activity, Bot, ClipboardList, Coins, Database, FolderOpen, Key, Loader2, RefreshCw, Search, Server, ShieldCheck, SlidersHorizontal, UserPlus, X } from 'lucide-react';
 import {
   proxyAdminHealth,
   proxyAdminAdjustCredits,
@@ -43,13 +43,14 @@ import {
   formatCreditDate,
   formatCreditTransactionType,
 } from '../../lib/creditDisplay';
-import type { ApiManagerTab } from './ApiManagerPanel';
+import { ApiManagerPanel } from './ApiManagerPanel';
+import { PlatformModelsPanel } from './PlatformModelsPanel';
 
 interface AdminUsersPanelProps {
   isOpen: boolean;
   onClose: () => void;
   currentUser?: ProxyUser | null;
-  onOpenApiManager?: (tab?: ApiManagerTab) => void;
+  variant?: 'floating' | 'page';
 }
 
 const emptyForm = {
@@ -82,7 +83,9 @@ const INVITATION_PAGE_SIZE = 80;
 const AUDIT_PAGE_SIZE = 80;
 const CREDIT_PAGE_SIZE = 80;
 
-type AdminTab = 'users' | 'credits' | 'invitations' | 'apiKeys' | 'modelCapabilities' | 'audit' | 'system';
+type AdminTab = 'overview' | 'users' | 'credits' | 'invitations' | 'apiKeys' | 'platformModels' | 'modelCapabilities' | 'audit' | 'system';
+const SERVER_KEY_ADMIN_TABS = ['server'] as const;
+const MODEL_CAPABILITY_ADMIN_TABS = ['capabilities'] as const;
 
 function roleLabel(role: string): string {
   if (role === 'admin') return '管理员';
@@ -108,13 +111,13 @@ function mergeById<T extends { id: string }>(current: T[], next: T[]): T[] {
   return Array.from(items.values());
 }
 
-export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager }: AdminUsersPanelProps) {
+export function AdminUsersPanel({ isOpen, onClose, currentUser, variant = 'floating' }: AdminUsersPanelProps) {
   const [users, setUsers] = useState<ProxyAdminCreditUser[]>([]);
   const [invitations, setInvitations] = useState<ProxyInvitation[]>([]);
   const [auditLogs, setAuditLogs] = useState<ProxyAuditLog[]>([]);
   const [creditTransactions, setCreditTransactions] = useState<ProxyCreditTransaction[]>([]);
   const [health, setHealth] = useState<ProxyAdminHealth | null>(null);
-  const [activeTab, setActiveTab] = useState<AdminTab>('users');
+  const [activeTab, setActiveTab] = useState<AdminTab>('overview');
   const [form, setForm] = useState(emptyForm);
   const [inviteForm, setInviteForm] = useState(emptyInviteForm);
   const [creditForm, setCreditForm] = useState(emptyCreditForm);
@@ -139,6 +142,9 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const [passwordUser, setPasswordUser] = useState<ProxyUser | null>(null);
+  const [passwordForm, setPasswordForm] = useState({ password: '', confirmation: '' });
+  const isPage = variant === 'page';
 
   const loadUsers = useCallback(async () => {
     setLoading(true);
@@ -359,6 +365,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
   };
 
   const handleDisableInvitation = async (invitation: ProxyInvitation) => {
+    if (!window.confirm(`确认禁用邀请码「${invitation.label || invitation.id}」吗？`)) return;
     setError('');
     try {
       await proxyDisableInvitation(invitation.id);
@@ -370,19 +377,38 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
   };
 
   const handleResetPassword = async (user: ProxyUser) => {
-    const password = window.prompt(`输入 ${user.email || user.username} 的新密码`);
-    if (!password) return;
+    setPasswordUser(user);
+    setPasswordForm({ password: '', confirmation: '' });
+  };
+
+  const handleConfirmPasswordReset = async () => {
+    if (!passwordUser) return;
+    if (passwordForm.password.length < 8) {
+      setError('新密码至少需要 8 位。');
+      return;
+    }
+    if (passwordForm.password !== passwordForm.confirmation) {
+      setError('两次输入的新密码不一致。');
+      return;
+    }
     setError('');
+    setSaving(true);
     try {
-      await proxyUpdateUserPassword(user.id, password);
+      await proxyUpdateUserPassword(passwordUser.id, passwordForm.password);
       setNotice('密码已更新');
+      setPasswordUser(null);
+      setPasswordForm({ password: '', confirmation: '' });
     } catch (err) {
       setError(err instanceof Error ? err.message : '更新密码失败');
+    } finally {
+      setSaving(false);
     }
   };
 
   const handleToggleStatus = async (user: ProxyUser) => {
     const nextStatus = !user.isEnabled;
+    const action = nextStatus ? '启用' : '禁用';
+    if (!window.confirm(`确认${action}用户「${user.email || user.username || user.id}」吗？`)) return;
     setError('');
     try {
       await proxyUpdateUserStatus(user.id, nextStatus);
@@ -415,6 +441,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
     }
 
     setError('');
+    if (!window.confirm(`确认给「${selectedCreditUser.email || selectedCreditUser.username || selectedCreditUser.id}」调整 ${amount} 积分吗？`)) return;
     setSaving(true);
     try {
       await proxyAdminAdjustCredits({
@@ -431,8 +458,8 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
     }
   };
 
-  return (
-    <FloatingWindow contentClassName="h-[calc(100vh-32px)] w-[calc(100vw-112px)] flex-col">
+  const content = (
+    <>
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-accent" />
@@ -447,9 +474,11 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
             <button onClick={reloadAll} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="刷新">
               <RefreshCw className={cn('h-4 w-4', loading && 'animate-spin')} />
             </button>
-            <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="关闭">
-              <X className="h-4 w-4" />
-            </button>
+            {!isPage && (
+              <button onClick={onClose} className="rounded p-1 text-gray-400 hover:bg-gray-700/50 hover:text-white" title="关闭">
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         </div>
 
@@ -457,6 +486,9 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
 
         <div className="grid min-h-0 flex-1 grid-cols-[220px_1fr] overflow-hidden">
           <aside className="space-y-2 overflow-auto border-r border-panel-border p-3">
+            <TabButton active={activeTab === 'overview'} icon={<Activity className="h-3.5 w-3.5" />} onClick={() => setActiveTab('overview')}>
+              概览
+            </TabButton>
             <TabButton active={activeTab === 'users'} icon={<UserPlus className="h-3.5 w-3.5" />} onClick={() => setActiveTab('users')}>
               用户
             </TabButton>
@@ -468,6 +500,9 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
             </TabButton>
             <TabButton active={activeTab === 'apiKeys'} icon={<Key className="h-3.5 w-3.5" />} onClick={() => setActiveTab('apiKeys')}>
               API Key
+            </TabButton>
+            <TabButton active={activeTab === 'platformModels'} icon={<Bot className="h-3.5 w-3.5" />} onClick={() => setActiveTab('platformModels')}>
+              平台模型
             </TabButton>
             <TabButton active={activeTab === 'modelCapabilities'} icon={<SlidersHorizontal className="h-3.5 w-3.5" />} onClick={() => setActiveTab('modelCapabilities')}>
               模型能力
@@ -481,6 +516,66 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
           </aside>
 
           <main className="min-h-0 overflow-auto p-4">
+            {activeTab === 'overview' && (
+              <section className="space-y-4">
+                <div className="grid gap-3 md:grid-cols-4">
+                  <StatCard icon={<Server className="h-4 w-4" />} label="部署模式" value={deploymentLabel(health?.deploymentMode)} />
+                  <StatCard icon={<UserPlus className="h-4 w-4" />} label="启用用户" value={`${health?.enabledUsers ?? 0}/${health?.users ?? 0}`} />
+                  <StatCard icon={<Database className="h-4 w-4" />} label="任务" value={String(health?.tasks ?? 0)} />
+                  <StatCard icon={<FolderOpen className="h-4 w-4" />} label="资产" value={String(health?.assets ?? 0)} />
+                </div>
+                <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                  <section className="rounded-lg border border-panel-border bg-canvas-bg/50 p-3">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-sm font-medium text-white">任务队列</div>
+                        <div className="mt-1 text-[10px] text-gray-500">{summarizeQueues(health?.queues)}</div>
+                      </div>
+                      <button
+                        onClick={() => void loadHealth()}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-300 hover:border-accent hover:text-accent"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        刷新
+                      </button>
+                    </div>
+                    {!health?.queues?.length ? (
+                      <EmptyText>暂无队列状态</EmptyText>
+                    ) : (
+                      <div className="grid gap-2 md:grid-cols-2">
+                        {health.queues.map((queue) => (
+                          <QueueHealthCard key={queue.name} queue={queue} />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                  <section className="rounded-lg border border-panel-border bg-canvas-bg/50 p-3">
+                    <div className="mb-3 flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-medium text-white">最近积分流水</div>
+                        <div className="mt-1 text-[10px] text-gray-500">用于快速判断平台共享 Key 的消耗情况。</div>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('credits')}
+                        className="rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-300 hover:border-accent hover:text-accent"
+                      >
+                        查看全部
+                      </button>
+                    </div>
+                    {creditTransactions.length === 0 ? (
+                      <EmptyText>暂无积分流水</EmptyText>
+                    ) : (
+                      <div className="overflow-hidden rounded-lg border border-panel-border">
+                        {creditTransactions.slice(0, 6).map((transaction) => (
+                          <CreditTransactionItem key={transaction.id} transaction={transaction} />
+                        ))}
+                      </div>
+                    )}
+                  </section>
+                </div>
+              </section>
+            )}
+
             {activeTab === 'users' && (
               <div className="grid gap-4 lg:grid-cols-[300px_1fr]">
                 <section className="space-y-3 rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
@@ -866,77 +961,29 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
             )}
 
             {activeTab === 'apiKeys' && (
-              <section className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-3">
-                  <AdminFeatureCard
-                    icon={<Cloud className="h-4 w-4" />}
-                    title="服务端 Key"
-                    description="管理员统一托管平台 Key，普通用户只能使用，不能查看或修改。"
-                  />
-                  <AdminFeatureCard
-                    icon={<Key className="h-4 w-4" />}
-                    title="用户 Key"
-                    description="保留 user_key 结构，后续可以让每个用户绑定自己的额度。"
-                  />
-                  <AdminFeatureCard
-                    icon={<Activity className="h-4 w-4" />}
-                    title="能力测试"
-                    description="保存 Key 后可以测试文本、图片和视频能力，避免工作流运行时才失败。"
-                  />
-                </div>
-                <div className="rounded-lg border border-panel-border bg-canvas-bg/60 p-4">
-                  <div className="mb-2 text-sm font-medium text-white">API Key 管理</div>
-                  <p className="max-w-2xl text-xs leading-5 text-gray-400">
-                    这里是后台里的 API Key 分区。服务器共享 Key 只能由管理员新增、编辑和删除；普通用户在 API 面板里只看到只读信息。
-                  </p>
-                  <PrimaryInlineButton
-                    disabled={!onOpenApiManager}
-                    onClick={() => {
-                      onClose();
-                      onOpenApiManager?.('server');
-                    }}
-                  >
-                    打开服务端 Key 管理
-                  </PrimaryInlineButton>
-                </div>
-              </section>
+              <ApiManagerPanel
+                allowedTabs={SERVER_KEY_ADMIN_TABS}
+                initialTab="server"
+                isOpen
+                mode="admin-server-keys"
+                onClose={() => undefined}
+                variant="embedded"
+              />
+            )}
+
+            {activeTab === 'platformModels' && (
+              <PlatformModelsPanel />
             )}
 
             {activeTab === 'modelCapabilities' && (
-              <section className="space-y-4">
-                <div className="grid gap-3 md:grid-cols-3">
-                  <AdminFeatureCard
-                    icon={<SlidersHorizontal className="h-4 w-4" />}
-                    title="模型限制"
-                    description="维护最大时长、参考图数量、seed、负面词、返回格式等能力。"
-                  />
-                  <AdminFeatureCard
-                    icon={<ShieldCheck className="h-4 w-4" />}
-                    title="节点联动"
-                    description="图片和视频节点会根据能力表提示限制，减少无效请求。"
-                  />
-                  <AdminFeatureCard
-                    icon={<ClipboardList className="h-4 w-4" />}
-                    title="厂商模板"
-                    description="按厂商文档手动维护 preset，适配火山、百炼、OpenAI 兼容服务。"
-                  />
-                </div>
-                <div className="rounded-lg border border-panel-border bg-canvas-bg/60 p-4">
-                  <div className="mb-2 text-sm font-medium text-white">模型能力管理</div>
-                  <p className="max-w-2xl text-xs leading-5 text-gray-400">
-                    这里是后台里的模型能力分区。你可以为不同 provider 和 model pattern 保存能力规则，让节点在选择模型后自动显示可用参数和限制。
-                  </p>
-                  <PrimaryInlineButton
-                    disabled={!onOpenApiManager}
-                    onClick={() => {
-                      onClose();
-                      onOpenApiManager?.('capabilities');
-                    }}
-                  >
-                    打开模型能力管理
-                  </PrimaryInlineButton>
-                </div>
-              </section>
+              <ApiManagerPanel
+                allowedTabs={MODEL_CAPABILITY_ADMIN_TABS}
+                initialTab="capabilities"
+                isOpen
+                mode="admin-capabilities"
+                onClose={() => undefined}
+                variant="embedded"
+              />
             )}
 
             {activeTab === 'audit' && (
@@ -1062,7 +1109,101 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
             )}
           </main>
         </div>
+        <PasswordResetDialog
+          confirmation={passwordForm.confirmation}
+          isSaving={saving}
+          password={passwordForm.password}
+          user={passwordUser}
+          onCancel={() => {
+            setPasswordUser(null);
+            setPasswordForm({ password: '', confirmation: '' });
+          }}
+          onChange={(patch) => setPasswordForm((current) => ({ ...current, ...patch }))}
+          onConfirm={handleConfirmPasswordReset}
+        />
+    </>
+  );
+
+  if (isPage) {
+    return (
+      <main className="admin-console-page text-gray-100">
+        <section className="admin-console-shell">
+          {content}
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <FloatingWindow contentClassName="h-[calc(100vh-32px)] w-[calc(100vw-112px)] flex-col">
+      {content}
     </FloatingWindow>
+  );
+}
+
+function PasswordResetDialog({
+  confirmation,
+  isSaving,
+  onCancel,
+  onChange,
+  onConfirm,
+  password,
+  user,
+}: {
+  confirmation: string;
+  isSaving: boolean;
+  onCancel: () => void;
+  onChange: (patch: Partial<{ password: string; confirmation: string }>) => void;
+  onConfirm: () => void;
+  password: string;
+  user: ProxyUser | null;
+}) {
+  if (!user) return null;
+  const label = user.email || user.username || user.id;
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 px-4">
+      <section className="w-full max-w-md rounded-2xl border border-panel-border bg-[#11161c] p-4 shadow-2xl">
+        <div className="mb-3">
+          <div className="text-sm font-semibold text-white">重置用户密码</div>
+          <div className="mt-1 text-xs leading-5 text-gray-500">目标用户：{label}</div>
+        </div>
+        <div className="space-y-3">
+          <Input
+            label="新密码"
+            type="password"
+            value={password}
+            onChange={(value) => onChange({ password: value })}
+            placeholder="至少 8 位"
+          />
+          <Input
+            label="再次输入新密码"
+            type="password"
+            value={confirmation}
+            onChange={(value) => onChange({ confirmation: value })}
+            placeholder="再次确认，避免误改"
+          />
+        </div>
+        <div className="mt-4 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-gray-500 hover:text-white"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isSaving || !password || !confirmation}
+            className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            确认重置
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -1152,18 +1293,6 @@ function CreditTransactionItem({ transaction }: { transaction: ProxyCreditTransa
   );
 }
 
-function AdminFeatureCard({ description, icon, title }: { description: string; icon: React.ReactNode; title: string }) {
-  return (
-    <div className="rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
-      <div className="mb-2 flex items-center gap-2 text-xs font-medium text-white">
-        <span className="text-accent">{icon}</span>
-        {title}
-      </div>
-      <p className="text-[10px] leading-4 text-gray-500">{description}</p>
-    </div>
-  );
-}
-
 function QueueHealthCard({ queue }: { queue: NonNullable<ProxyAdminHealth['queues']>[number] }) {
   const state = getQueueHealthState(queue);
   return (
@@ -1191,18 +1320,6 @@ function QueueHealthCard({ queue }: { queue: NonNullable<ProxyAdminHealth['queue
       </div>
       <div className="mt-2 text-[10px] leading-4 text-gray-500">{state.description}</div>
     </div>
-  );
-}
-
-function PrimaryInlineButton({ children, disabled, onClick }: { children: React.ReactNode; disabled?: boolean; onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="mt-4 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
-    >
-      {children}
-    </button>
   );
 }
 
@@ -1291,7 +1408,7 @@ function PrimaryButton({ children, onClick, disabled }: { children: React.ReactN
     <button
       onClick={onClick}
       disabled={disabled}
-      className="flex w-full items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+      className="flex w-full items-center justify-center gap-2 rounded-md border border-accent/45 bg-accent/15 px-3 py-2 text-xs font-medium text-white shadow-sm shadow-black/20 transition-colors hover:border-accent/70 hover:bg-accent/25 disabled:cursor-not-allowed disabled:border-panel-border disabled:bg-canvas-bg disabled:text-gray-500 disabled:opacity-70"
     >
       {children}
     </button>

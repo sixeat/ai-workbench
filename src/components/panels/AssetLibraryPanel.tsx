@@ -602,7 +602,10 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
             className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
           />
           <div className="mt-2 flex gap-2">
-            <button onClick={() => setShowCreateForm((value) => !value)} className="flex flex-1 items-center justify-center gap-1 rounded-md bg-accent px-2 py-1.5 text-xs text-white hover:bg-accent-hover">
+            <button
+              onClick={() => setShowCreateForm((value) => !value)}
+              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-accent/45 bg-accent/15 px-2 py-1.5 text-xs font-medium text-white shadow-sm shadow-black/20 transition-colors hover:border-accent/70 hover:bg-accent/25"
+            >
               <Plus className="h-3.5 w-3.5" />
               新建集合
             </button>

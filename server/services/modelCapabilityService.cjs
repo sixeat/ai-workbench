@@ -1,4 +1,4 @@
-const { BASE_CAPABILITIES } = require('../modelCapabilities.cjs');
+const { BASE_CAPABILITIES, resolveModelCapabilitiesDetailed } = require('../modelCapabilities.cjs');
 const {
   modelCapabilityRepository: defaultModelCapabilityRepository,
 } = require('../repositories/modelCapabilityRepository.cjs');
@@ -109,6 +109,14 @@ function createModelCapabilityService(options = {}) {
     };
   }
 
+  function resolveCapabilities(queryParams = {}) {
+    const providerId = normalizeProviderId(queryParams.providerId || 'openai-compatible');
+    const model = String(queryParams.model || '').trim();
+    if (!model) throw publicError(400, 'model is required');
+
+    return resolveModelCapabilitiesDetailed(providerId, model, modelCapabilityRepository);
+  }
+
   function saveCapability(req, body = {}) {
     const providerId = normalizeProviderId(body.providerId);
     const modelPattern = normalizeModelPattern(body.modelPattern);
@@ -139,6 +147,7 @@ function createModelCapabilityService(options = {}) {
 
   return {
     listCapabilities,
+    resolveCapabilities,
     saveCapability,
   };
 }

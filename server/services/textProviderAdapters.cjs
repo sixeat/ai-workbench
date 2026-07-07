@@ -7,6 +7,7 @@ const INTERNAL_FIELDS = new Set([
   'hasSystem',
   'messageCount',
   'parentTaskId',
+  'platformModelId',
   'publicBaseUrl',
   'providerId',
   'requestKind',

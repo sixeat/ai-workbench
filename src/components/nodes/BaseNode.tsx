@@ -25,6 +25,7 @@ import {
   Video,
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { apiInstanceSupportsNode } from '../../lib/apiInstanceCapabilities';
 import { loadAllAssetCollections } from '../../lib/assetCollectionCache';
 import { isSelectableImageAsset } from '../../lib/imageAssetSelection';
 import { clearImageInputConfig, imageInputConfigFromAsset } from '../../lib/imageInputConfig';
@@ -42,10 +43,11 @@ import {
   type ProxyModelCapabilities,
 } from '../../lib/apiProxy';
 import { getNodeDefinition } from '../../data/nodeRegistry';
-import { getProviderDefaultModels, getProviderTemplate } from '../../data/providerRegistry';
+import { getProviderDefaultModels } from '../../data/providerRegistry';
 import { useApiStore } from '../../stores/apiStore';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { useImagePreviewStore } from '../../stores/imagePreviewStore';
+import { platformModelSupportsNode, usePlatformModelStore } from '../../stores/platformModelStore';
 import { NODE_COLORS, type NodeRunAssetSummary, type NodeRunSummary as NodeRunSummaryData, type NodeType } from '../../types/nodes';
 import { ImageInputNodeBody } from './ImageInputNodeBody';
 import { NodeModelSelector } from './NodeModelSelector';
@@ -78,6 +80,10 @@ const ICON_MAP: Record<string, FC<{ className?: string }>> = {
 const NODE_OUTPUT_COLLECTION_NAME = '节点产物';
 const IMAGE_LIBRARY_PAGE_SIZE = 80;
 
+function hasModelCapabilities(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0);
+}
+
 function isImageModel(model: string): boolean {
   const normalized = model.toLowerCase();
   return normalized.includes('image') || normalized.includes('dall-e') || normalized.includes('stable-diffusion');
@@ -93,16 +99,6 @@ function rankModelsForNode(type: NodeType, models: string[]): string[] {
     return preferred.length > 0 ? preferred : models;
   }
   return models;
-}
-
-function supportsNode(providerId: string, type: NodeType): boolean {
-  if (providerId === 'custom') return true;
-  const provider = getProviderTemplate(providerId);
-  if (!provider) return false;
-  if (type === 'shotSplit' || type === 'promptOptimize') return true;
-  if (type === 'imageToImage') return provider.supportedNodes.includes('imageGen');
-  if (type === 'multiImageVideo') return provider.supportedNodes.includes('videoGen');
-  return provider.supportedNodes.includes(type);
 }
 
 function isNodeOutputCollection(collection: ProxyAssetCollection): boolean {
@@ -162,6 +158,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
 
   const { updateNodeData, setSelectedNodeId } = useCanvasStore();
   const { instances } = useApiStore();
+  const { loadPlatformModels, models: platformModels } = usePlatformModelStore();
   const { openPreview } = useImagePreviewStore();
   const [showInstanceSelect, setShowInstanceSelect] = useState(false);
   const [showModelSelect, setShowModelSelect] = useState(false);
@@ -180,11 +177,24 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   const [runAssetNotice, setRunAssetNotice] = useState('');
   const [runAssetError, setRunAssetError] = useState('');
 
-  const selectedInstance = instances[data.config.instanceId] || null;
+  const selectedPlatformModel = platformModels.find((model) => model.id === data.config.platformModelId) || null;
+  const selectedInstanceId = String(data.config.instanceId || '');
+  const selectedInstance = data.config.modelSource === 'platform' || selectedInstanceId.startsWith('server:')
+    ? null
+    : instances[selectedInstanceId] || null;
   const availableInstances = useMemo(() => {
     if (!hasModelSelector) return [];
-    return Object.values(instances).filter((instance) => instance.isEnabled && supportsNode(instance.providerId, data.type));
+    return Object.values(instances).filter((instance) => (
+      instance.isEnabled
+      && instance.keyScope !== 'server'
+      && !instance.id.startsWith('server:')
+      && apiInstanceSupportsNode(instance, data.type)
+    ));
   }, [instances, hasModelSelector, data.type]);
+  const availablePlatformModels = useMemo(() => {
+    if (!hasModelSelector) return [];
+    return platformModels.filter((model) => platformModelSupportsNode(model, data.type));
+  }, [data.type, hasModelSelector, platformModels]);
 
   const availableModels = useMemo(() => {
     if (!selectedInstance) return [];
@@ -194,12 +204,16 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   }, [selectedInstance, data.type]);
 
   const capabilityBadges = useMemo(() => {
+    if (hasModelCapabilities(selectedPlatformModel?.capabilities)) {
+      return summarizeModelCapabilityBadges(data.type, selectedPlatformModel.capabilities, 3);
+    }
     const capabilities = resolveModelCapabilities(capabilityRecords, selectedInstance?.providerId, String(data.config.model || ''));
     return summarizeModelCapabilityBadges(data.type, capabilities, 3);
-  }, [capabilityRecords, data.config.model, data.type, selectedInstance?.providerId]);
+  }, [capabilityRecords, data.config.model, data.type, selectedInstance?.providerId, selectedPlatformModel?.capabilities]);
 
   useEffect(() => {
     if (!hasModelSelector) return;
+    void loadPlatformModels();
     let cancelled = false;
     loadCachedModelCapabilities()
       .then((records) => {
@@ -211,7 +225,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     return () => {
       cancelled = true;
     };
-  }, [hasModelSelector]);
+  }, [hasModelSelector, loadPlatformModels]);
 
   useEffect(() => {
     if (!runAssetNotice) return;
@@ -234,6 +248,8 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
       updateNodeData(id, {
         config: {
           ...data.config,
+          modelSource: 'custom',
+          platformModelId: '',
           instanceId,
           model: rankModelsForNode(data.type, models)[0] || data.config.model || '',
         },
@@ -241,6 +257,24 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
       setShowInstanceSelect(false);
     },
     [data.config, data.type, id, instances, updateNodeData]
+  );
+
+  const handleSelectPlatformModel = useCallback(
+    (platformModelId: string) => {
+      const model = platformModels.find((item) => item.id === platformModelId);
+      updateNodeData(id, {
+        config: {
+          ...data.config,
+          modelSource: 'platform',
+          platformModelId,
+          instanceId: '',
+          model: model?.model || data.config.model || '',
+        },
+      });
+      setShowInstanceSelect(false);
+      setShowModelSelect(false);
+    },
+    [data.config, id, platformModels, updateNodeData]
   );
 
   const handleSelectModel = useCallback(
@@ -505,9 +539,12 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
       {hasModelSelector && (
         <NodeModelSelector
           selectedInstance={selectedInstance}
+          selectedPlatformModel={selectedPlatformModel}
           availableInstances={availableInstances}
+          availablePlatformModels={availablePlatformModels}
           availableModels={availableModels}
           selectedInstanceId={data.config.instanceId}
+          selectedPlatformModelId={data.config.platformModelId}
           selectedModel={data.config.model}
           showInstanceSelect={showInstanceSelect}
           showModelSelect={showModelSelect}
@@ -520,6 +557,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
             setShowInstanceSelect(false);
           }}
           onSelectInstance={handleSelectInstance}
+          onSelectPlatformModel={handleSelectPlatformModel}
           onSelectModel={handleSelectModel}
           capabilityBadges={capabilityBadges}
         />

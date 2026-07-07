@@ -16,6 +16,7 @@ function imageRetryBody(task) {
   return {
     ...pick(task.input || {}, [
       'apiKeyId',
+      'platformModelId',
       'model',
       'mode',
       'prompt',
@@ -46,6 +47,7 @@ function videoRetryBody(task) {
   return {
     ...pick(task.input || {}, [
       'apiKeyId',
+      'platformModelId',
       'model',
       'mode',
       'text',

@@ -23,6 +23,7 @@ function textRetryBody(task) {
   return {
     ...pick(task.input || {}, [
       'apiKeyId',
+      'platformModelId',
       'baseUrl',
       'requestKind',
       'model',

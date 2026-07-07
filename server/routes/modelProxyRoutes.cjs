@@ -132,6 +132,14 @@ function registerModelProxyRoutes(app, context) {
     res.json(modelCapabilityService.listCapabilities(req.query || {}));
   });
 
+  app.get('/api/model-capabilities/resolve', (req, res) => {
+    try {
+      res.json(modelCapabilityService.resolveCapabilities(req.query || {}));
+    } catch (error) {
+      sendSafeError(res, error, { message: 'Unable to resolve model capabilities.' });
+    }
+  });
+
   app.get('/api/model-capability-presets', (req, res) => {
     const providerId = String(req.query.providerId || '').trim();
     const presets = listModelCapabilityPresets()

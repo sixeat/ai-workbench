@@ -3,8 +3,8 @@ import type { ApiInstance } from '../types/api';
 export type ApiInstanceSource = 'platform' | 'custom';
 
 export const API_INSTANCE_SOURCE_LABELS: Record<ApiInstanceSource, string> = {
-  platform: '平台提供的 API',
-  custom: '自定义 API',
+  platform: '平台模型',
+  custom: '我的 API',
 };
 
 export function getApiInstanceSource(instance: ApiInstance): ApiInstanceSource {

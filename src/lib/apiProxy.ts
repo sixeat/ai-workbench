@@ -1,4 +1,5 @@
 import type { NodeType } from '../types/nodes';
+import type { ModelCapabilities, ModelCapabilityRuleMatch, ModelCapabilitySource } from '../types/modelCapabilities';
 
 type ViteLikeEnv = Record<string, unknown>;
 
@@ -195,6 +196,8 @@ export interface ProxyApiKey {
   providerId: string;
   name?: string;
   baseUrl?: string;
+  models?: string[];
+  allowedCapabilities?: Record<string, boolean>;
   isEnabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -222,6 +225,59 @@ export interface ProxyApiKeyListResponse {
   };
 }
 
+export type ProxyPlatformModelCapability = 'chat' | 'imageGeneration' | 'videoGeneration';
+
+export interface ProxyPlatformModelRoute {
+  id: string;
+  platformModelId: string;
+  apiKeyId: string;
+  providerId: string;
+  upstreamModel: string;
+  priority: number;
+  isEnabled: boolean;
+  apiKey?: {
+    id: string;
+    name?: string;
+    providerId: string;
+    keyScope: string;
+    isEnabled: boolean;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProxyPlatformModel {
+  id: string;
+  displayName: string;
+  description?: string;
+  capability: ProxyPlatformModelCapability;
+  model: string;
+  capabilities?: ModelCapabilities;
+  capabilityOverrides?: ModelCapabilities;
+  capabilitySource?: ModelCapabilitySource;
+  capabilityWarnings?: string[];
+  isEnabled: boolean;
+  sortOrder: number;
+  routes?: ProxyPlatformModelRoute[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProxyPlatformModelListOptions {
+  limit?: number;
+  offset?: number;
+  search?: string;
+  capability?: ProxyPlatformModelCapability | string;
+}
+
+export interface ProxyPlatformModelListResponse {
+  models: ProxyPlatformModel[];
+  count: number;
+  total?: number;
+  limit?: number;
+  offset?: number;
+}
+
 export interface ProxyApiKeyTestResult {
   apiKeyId: string;
   providerId: string;
@@ -239,7 +295,7 @@ export interface ProxyApiKeyTestResult {
     models: Array<{ id: string; ownedBy?: string }>;
     error?: string;
   };
-  capabilities: Record<string, any>;
+  capabilities: ModelCapabilities;
   tests: {
     credentials: { ok: boolean };
     text: { ok: boolean; skipped?: boolean; method?: string; networkRequest?: boolean; billable?: boolean; reason?: string; status?: number; error?: string };
@@ -271,7 +327,7 @@ export interface ProxyModelCapabilities {
   id: string;
   providerId: string;
   modelPattern: string;
-  capabilities: Record<string, any>;
+  capabilities: ModelCapabilities;
   createdAt: string;
   updatedAt: string;
 }
@@ -282,7 +338,13 @@ export interface ProxyModelCapabilityPreset {
   description: string;
   providerId: string;
   modelPattern: string;
-  capabilities: Record<string, any>;
+  capabilities: ModelCapabilities;
+}
+
+export interface ProxyResolvedModelCapabilities {
+  capabilities: ModelCapabilities;
+  matchedRules: ModelCapabilityRuleMatch[];
+  source: ModelCapabilitySource;
 }
 
 export interface ProxyModelCapabilityListOptions {
@@ -401,6 +463,7 @@ export interface ProxyRequest {
 
 export interface ProxyCredentialRef {
   apiKeyId?: string;
+  platformModelId?: string;
   providerId?: string;
 }
 
@@ -1313,6 +1376,86 @@ export async function proxyListProviders(): Promise<{ providers: ProxyProviderTe
   return data;
 }
 
+function queryString(options: object = {}): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value == null || value === '') continue;
+    params.set(key, String(value));
+  }
+  return params.toString() ? `?${params.toString()}` : '';
+}
+
+export async function proxyListPlatformModels(
+  options: ProxyPlatformModelListOptions = {}
+): Promise<ProxyPlatformModelListResponse> {
+  const response = await authFetch(apiUrl(`/api/platform-models${queryString(options)}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyAdminListPlatformModels(
+  options: ProxyPlatformModelListOptions = {}
+): Promise<ProxyPlatformModelListResponse> {
+  const response = await authFetch(apiUrl(`/api/admin/platform-models${queryString(options)}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyAdminSavePlatformModel(body: Partial<ProxyPlatformModel> & {
+  displayName: string;
+  capability: ProxyPlatformModelCapability;
+  model: string;
+}): Promise<{ model: ProxyPlatformModel }> {
+  const method = body.id ? 'PATCH' : 'POST';
+  const path = body.id
+    ? `/api/admin/platform-models/${encodeURIComponent(body.id)}`
+    : '/api/admin/platform-models';
+  const response = await authFetch(apiUrl(path), {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyAdminDeletePlatformModel(platformModelId: string): Promise<void> {
+  const response = await authFetch(apiUrl(`/api/admin/platform-models/${encodeURIComponent(platformModelId)}`), {
+    method: 'DELETE',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+}
+
+export async function proxyAdminSavePlatformModelRoute(
+  platformModelId: string,
+  body: Partial<ProxyPlatformModelRoute> & { apiKeyId: string }
+): Promise<{ route: ProxyPlatformModelRoute; model: ProxyPlatformModel }> {
+  const method = body.id ? 'PATCH' : 'POST';
+  const path = body.id
+    ? `/api/admin/platform-models/${encodeURIComponent(platformModelId)}/routes/${encodeURIComponent(body.id)}`
+    : `/api/admin/platform-models/${encodeURIComponent(platformModelId)}/routes`;
+  const response = await authFetch(apiUrl(path), {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyAdminDeletePlatformModelRoute(platformModelId: string, routeId: string): Promise<void> {
+  const response = await authFetch(apiUrl(`/api/admin/platform-models/${encodeURIComponent(platformModelId)}/routes/${encodeURIComponent(routeId)}`), {
+    method: 'DELETE',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+}
+
 export async function proxySaveApiKey(body: {
   id?: string;
   keyScope: 'user' | 'server';
@@ -1320,6 +1463,8 @@ export async function proxySaveApiKey(body: {
   name: string;
   baseUrl?: string;
   apiKey: string;
+  models?: string[];
+  allowedCapabilities?: Record<string, boolean>;
   isEnabled?: boolean;
 }): Promise<{ apiKey: ProxyApiKey }> {
   const response = await authFetch(apiUrl('/api/api-keys'), {
@@ -1339,6 +1484,8 @@ export async function proxyUpdateApiKey(
     name: string;
     baseUrl: string;
     apiKey: string;
+    models: string[];
+    allowedCapabilities: Record<string, boolean>;
     isEnabled: boolean;
   }>
 ): Promise<{ apiKey: ProxyApiKey }> {
@@ -1401,10 +1548,18 @@ export async function proxyListModelCapabilityPresets(providerId?: string): Prom
   return data;
 }
 
+export async function proxyResolveModelCapabilities(providerId: string, model: string): Promise<ProxyResolvedModelCapabilities> {
+  const params = new URLSearchParams({ providerId, model });
+  const response = await authFetch(apiUrl(`/api/model-capabilities/resolve?${params.toString()}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
 export async function proxySaveModelCapabilities(body: {
   providerId: string;
   modelPattern: string;
-  capabilities: Record<string, any>;
+  capabilities: ModelCapabilities;
 }): Promise<{ capability: ProxyModelCapabilities }> {
   const response = await authFetch(apiUrl('/api/model-capabilities'), {
     method: 'POST',

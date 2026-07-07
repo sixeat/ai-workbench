@@ -58,6 +58,7 @@ function createCreditService({
   }
 
   function resolveTaskKeyScope({ body = {}, userId }) {
+    if (body.platformModelId) return 'server';
     if (body.apiKey) return 'user';
     if (body.apiKeyId) {
       const key = apiKeyRepository.getApiKeyForUser(body.apiKeyId, userId, false);

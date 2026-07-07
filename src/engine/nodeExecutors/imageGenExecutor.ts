@@ -24,6 +24,7 @@ interface ImageGenerationMeta {
   strength: number;
   responseFormat: string;
   apiKeyId?: string;
+  platformModelId?: string;
   providerId?: string;
   promptExtend: boolean;
   enableSequential: boolean;
@@ -102,6 +103,7 @@ async function generateOne(
 
   const data = await proxyOpenAIImage(baseUrl, apiKey, body, {
     apiKeyId: meta.apiKeyId,
+    platformModelId: meta.platformModelId,
     providerId: meta.providerId,
   });
   const items = Array.isArray(data.data) ? data.data : [];
@@ -117,6 +119,7 @@ export async function executeImageGen(
   context?: ExecutionContext
 ): Promise<NodeOutputs> {
   const instanceId = String(config.instanceId || '');
+  const platformModelId = String(config.platformModelId || '');
   const promptInput = Array.isArray(inputs.prompt)
     ? inputs.prompt.map((item) => item?.type === 'parameter' ? '' : toText(item)).filter(Boolean).join('\n')
     : inputs.prompt ?? inputs.text ?? config.prompt ?? '';
@@ -137,12 +140,12 @@ export async function executeImageGen(
   const responseFormat = String(config.responseFormat || 'b64_json');
   const model = String(config.model || 'gpt-image-1');
 
-  if (!instanceId) return { image: null, images: [], url: '', error: '请选择 API 实例' };
+  if (!instanceId && !platformModelId) return { image: null, images: [], url: '', error: '请选择 API 实例' };
 
-  const runtimeConfig = getInstanceRuntimeConfig(instanceId);
-  if (!runtimeConfig) return { image: null, images: [], url: '', error: 'API 实例配置无效' };
+  const runtimeConfig = instanceId ? getInstanceRuntimeConfig(instanceId) : null;
+  if (!platformModelId && !runtimeConfig) return { image: null, images: [], url: '', error: 'API 实例配置无效' };
 
-  const { baseUrl, apiKey, apiKeyId, provider } = runtimeConfig;
+  const { baseUrl, apiKey, apiKeyId, provider } = runtimeConfig || { baseUrl: '', apiKey: '', apiKeyId: undefined, provider: undefined };
   const meta = {
     model,
     size,
@@ -154,6 +157,7 @@ export async function executeImageGen(
     strength,
     responseFormat,
     apiKeyId,
+    platformModelId: platformModelId || undefined,
     providerId: provider?.id,
     promptExtend: Boolean(config.promptExtend),
     enableSequential: Boolean(config.enableSequential),

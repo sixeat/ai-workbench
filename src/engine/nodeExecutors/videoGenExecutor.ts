@@ -75,6 +75,7 @@ export async function executeVideoGen(
   context?: ExecutionContext
 ): Promise<NodeOutputs> {
   const instanceId = String(config.instanceId || '');
+  const platformModelId = String(config.platformModelId || '');
   const shotList = collectShotList(inputs.images ?? inputs.prompt ?? inputs.shotList);
   const images = [
     ...collectImageAssets(inputs.image),
@@ -90,27 +91,27 @@ export async function executeVideoGen(
   const seed = Number(config.seed || 0);
   const negativePrompt = String(config.negativePrompt || '');
 
-  if (!instanceId) return { video: null, task: null, error: '请选择 API 实例' };
+  if (!instanceId && !platformModelId) return { video: null, task: null, error: '请选择 API 实例' };
   if (!prompt && images.length === 0 && !shotList) {
     return { video: null, task: null, error: '视频生成需要提示词、参考图或分镜' };
   }
 
-  const runtimeConfig = getInstanceRuntimeConfig(instanceId);
-  if (!runtimeConfig) return { video: null, task: null, error: 'API 实例配置无效' };
+  const runtimeConfig = instanceId ? getInstanceRuntimeConfig(instanceId) : null;
+  if (!platformModelId && !runtimeConfig) return { video: null, task: null, error: 'API 实例配置无效' };
 
   const content = buildContent([prompt, motion].filter(Boolean).join('\n'), images, config);
   const createdAt = new Date().toISOString();
   const localTaskId = makeWorkflowId('video_task');
   const model = String(config.model || 'doubao-seedance-2-0-mini-260615');
-  const providerId = runtimeConfig.provider?.id || 'seedance';
+  const providerId = runtimeConfig?.provider?.id || 'seedance';
   const defaultBaseUrl = providerId === 'aliyun-bailian'
     ? 'https://dashscope.aliyuncs.com'
     : 'https://ark.cn-beijing.volces.com';
 
   try {
     const response = await proxyCreateVideoTask(
-      runtimeConfig.baseUrl || defaultBaseUrl,
-      runtimeConfig.apiKey,
+      runtimeConfig?.baseUrl || defaultBaseUrl,
+      runtimeConfig?.apiKey || '',
       {
         providerId,
         model,
@@ -130,7 +131,7 @@ export async function executeVideoGen(
         negativePrompt,
         upstreamTaskIds: context?.upstreamTaskIds || [],
       },
-      { apiKeyId: runtimeConfig.apiKeyId, providerId }
+      { apiKeyId: runtimeConfig?.apiKeyId, platformModelId: platformModelId || undefined, providerId }
     );
 
     const video: VideoAsset = {

@@ -25,6 +25,7 @@ export interface ApiInstance {
   providerId: string;
   apiKeyId?: string;
   keyScope?: 'user' | 'server';
+  allowedCapabilities?: ApiKeyAllowedCapabilities;
   apiKey: string;
   baseUrl?: string;
   customHeaders?: Record<string, string>;
@@ -33,6 +34,14 @@ export interface ApiInstance {
   isEnabled: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ApiKeyAllowedCapabilities {
+  chat?: boolean;
+  imageGeneration?: boolean;
+  imageReference?: boolean;
+  multiImageReference?: boolean;
+  videoGeneration?: boolean;
 }
 
 export interface AuthConfig {

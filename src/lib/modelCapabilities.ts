@@ -1,8 +1,9 @@
 import type { ProxyModelCapabilities } from './apiProxy';
 import type { NodeConfig, NodeInputs, NodeType } from '../types/nodes';
+import type { ModelCapabilities } from '../types/modelCapabilities';
 import { getParameter, isImageAsset, isRecord, isShotList, isVideoAsset } from '../engine/workflowValues';
 
-type CapabilityMap = Record<string, unknown>;
+type CapabilityMap = ModelCapabilities;
 
 export interface ModelCapabilityBadge {
   label: string;

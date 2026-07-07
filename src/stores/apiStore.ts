@@ -27,8 +27,16 @@ interface ApiStoreActions {
   toggleInstanceEnabled: (instanceId: string) => void;
 }
 
-function serverInstanceId(apiKeyId: string): string {
-  return `server:${apiKeyId}`;
+function backendUserInstanceId(apiKeyId: string): string {
+  return `user:${apiKeyId}`;
+}
+
+function isBackendUserInstanceId(instanceId: string): boolean {
+  return instanceId.startsWith('user:');
+}
+
+function isLegacyServerInstanceId(instanceId: string): boolean {
+  return instanceId.startsWith('server:');
 }
 
 export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
@@ -71,7 +79,7 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
         set((state) => {
           const existing = state.instances[instanceId];
           if (!existing) return state;
-          if (state.deploymentMode === 'server' && !instanceId.startsWith('server:')) return state;
+          if (state.deploymentMode === 'server' && !isBackendUserInstanceId(instanceId)) return state;
 
           const updated: ApiInstance = {
             ...existing,
@@ -107,10 +115,10 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
           if (mode !== 'server') return { deploymentMode: mode };
 
           const serverInstances = Object.fromEntries(
-            Object.entries(state.instances).filter(([id]) => id.startsWith('server:'))
+            Object.entries(state.instances).filter(([id]) => isBackendUserInstanceId(id))
           );
           for (const id of Object.keys(state.instances)) {
-            if (!id.startsWith('server:')) delete runtimeApiKeys[id];
+            if (!isBackendUserInstanceId(id)) delete runtimeApiKeys[id];
           }
 
           return {
@@ -127,18 +135,19 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
       syncServerKeyInstances: (apiKeys, options = {}) => {
         set((state) => {
           const nextInstances = { ...state.instances };
-          const activeServerIds = new Set(apiKeys.map((key) => serverInstanceId(key.id)));
+          const userKeys = apiKeys.filter((key) => key.keyScope === 'user');
+          const activeServerIds = new Set(userKeys.map((key) => backendUserInstanceId(key.id)));
 
           if (options.replaceMissing) {
             for (const id of Object.keys(nextInstances)) {
-              if (id.startsWith('server:') && !activeServerIds.has(id)) {
+              if ((isBackendUserInstanceId(id) || isLegacyServerInstanceId(id)) && !activeServerIds.has(id)) {
                 delete nextInstances[id];
               }
             }
           }
 
-          for (const key of apiKeys) {
-            const id = serverInstanceId(key.id);
+          for (const key of userKeys) {
+            const id = backendUserInstanceId(key.id);
             const existing = nextInstances[id];
             nextInstances[id] = {
               ...existing,
@@ -147,10 +156,11 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
               providerId: key.providerId,
               apiKeyId: key.id,
               keyScope: key.keyScope,
+              allowedCapabilities: key.allowedCapabilities || existing?.allowedCapabilities,
               apiKey: '',
               baseUrl: key.baseUrl || undefined,
               customHeaders: existing?.customHeaders,
-              models: existing?.models?.length ? existing.models : getProviderDefaultModels(key.providerId),
+              models: key.models?.length ? key.models : existing?.models?.length ? existing.models : getProviderDefaultModels(key.providerId),
               modelFetchMode: existing?.modelFetchMode || 'manual',
               isEnabled: key.isEnabled,
               createdAt: existing?.createdAt || key.createdAt || new Date().toISOString(),
@@ -175,8 +185,8 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
       partialize: (state) => ({
         deploymentMode: state.deploymentMode,
         instances: Object.fromEntries(
-          Object.entries(state.instances)
-            .filter(([id]) => state.deploymentMode !== 'server' && !id.startsWith('server:'))
+            Object.entries(state.instances)
+              .filter(([id]) => state.deploymentMode !== 'server' && !isLegacyServerInstanceId(id) && !isBackendUserInstanceId(id))
             .map(([id, instance]) => [id, { ...instance, apiKey: '' }])
         ),
       }),
@@ -188,7 +198,7 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
           deploymentMode,
           instances: Object.fromEntries(
             Object.entries(state.instances || {})
-              .filter(([id]) => deploymentMode !== 'server' && !id.startsWith('server:'))
+              .filter(([id]) => deploymentMode !== 'server' && !isLegacyServerInstanceId(id) && !isBackendUserInstanceId(id))
               .map(([id, instance]) => [id, { ...instance, apiKey: '' }])
           ),
         };

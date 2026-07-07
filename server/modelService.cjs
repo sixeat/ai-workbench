@@ -13,6 +13,7 @@ function printStartup() {
   console.log('    POST /api/models');
   console.log('    GET  /api/providers');
   console.log('    GET  /api/model-capabilities');
+  console.log('    GET  /api/model-capabilities/resolve');
   console.log('    GET  /api/model-capability-presets');
   console.log('    POST /api/model-capabilities');
   console.log('    GET  /api/api-keys');

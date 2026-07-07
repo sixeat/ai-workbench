@@ -2,7 +2,8 @@ import type { NodeData } from '../types/nodes';
 import type { ExecutionLog } from '../types/workflow';
 
 export interface TextModelContext {
-  instanceId: string;
+  instanceId?: string;
+  platformModelId?: string;
   model: string;
   providerId?: string;
   sourceNodeId?: string;

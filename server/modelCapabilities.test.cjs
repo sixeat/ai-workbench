@@ -12,7 +12,9 @@ const { createUser, db, listAuditLogs, listModelCapabilities, upsertModelCapabil
 const {
   filterImageBodyByCapabilities,
   filterVideoBodyByCapabilities,
+  getModelCapabilities,
   listModelCapabilityPresets,
+  resolveModelCapabilitiesDetailed,
 } = require('./modelCapabilities.cjs');
 const {
   MODEL_CAPABILITY_LIMITS: MODEL_CAPABILITY_ROUTE_LIMITS,
@@ -58,6 +60,7 @@ test('model capability presets expose complete manually maintained templates', (
   const bailianImage = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-image*');
   const bailianTextVideo = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-t2v*');
   const bailianImageVideo = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-*-i2v*');
+  const gptImage2 = presets.find((preset) => preset.providerId === 'openai-compatible' && preset.modelPattern === 'gpt-image-2*');
 
   assert.ok(seedance);
   assert.equal(seedance.capabilities.videoGeneration, true);
@@ -88,6 +91,36 @@ test('model capability presets expose complete manually maintained templates', (
   assert.equal(bailianImageVideo.capabilities.video.maxReferenceVideos, 1);
   assert.equal(bailianImageVideo.capabilities.video.maxReferenceAudios, 1);
   assert.deepEqual(bailianImageVideo.capabilities.video.mediaTypes, ['first_frame', 'last_frame', 'driving_audio', 'first_clip']);
+
+  assert.ok(gptImage2);
+  assert.equal(gptImage2.capabilities.imageGeneration, true);
+  assert.equal(gptImage2.capabilities.imageReference, true);
+  assert.equal(gptImage2.capabilities.multiImageReference, true);
+  assert.equal(gptImage2.capabilities.image.maxImages, 1);
+  assert.equal(gptImage2.capabilities.image.maxReferenceImages, 16);
+  assert.equal(gptImage2.capabilities.image.maxPixels, 8294400);
+  assert.equal(gptImage2.capabilities.responseFormatB64, true);
+});
+
+test('gpt-image-2 model capabilities mark it as an image generation model', () => {
+  const capabilities = getModelCapabilities('openai-compatible', 'gpt-image-2');
+
+  assert.equal(capabilities.imageGeneration, true);
+  assert.equal(capabilities.imageReference, true);
+  assert.equal(capabilities.multiImageReference, true);
+  assert.equal(capabilities.negativePrompt, false);
+  assert.equal(capabilities.quality, true);
+  assert.equal(capabilities.image.maxReferenceImages, 16);
+  assert.deepEqual(capabilities.image.sizeAliases.slice(-2), ['3840x2160', '2160x3840']);
+});
+
+test('resolved model capabilities include matched rules for admin previews', () => {
+  const resolved = resolveModelCapabilitiesDetailed('openai-compatible', 'gpt-image-2');
+
+  assert.equal(resolved.source, 'matched-rules');
+  assert.equal(resolved.capabilities.imageGeneration, true);
+  assert.ok(resolved.matchedRules.some((rule) => rule.modelPattern === '*'));
+  assert.ok(resolved.matchedRules.some((rule) => rule.modelPattern === 'gpt-image-2*'));
 });
 
 test('model capability preset route can filter by provider', () => {
@@ -111,6 +144,31 @@ test('model capability preset route can filter by provider', () => {
   assert.equal(res.statusCode, 200);
   assert.equal(res.body.presets.every((preset) => preset.providerId === 'aliyun-bailian'), true);
   assert.ok(res.body.count >= 1);
+  handlers.stopTextQueue();
+});
+
+test('model capability resolve route returns capabilities and matched rules', () => {
+  const app = createFakeApp();
+  const handlers = registerModelProxyRoutes(app, {
+    enableGenericProxy: false,
+    joinUrl: (baseUrl, endpoint) => `${baseUrl}${endpoint}`,
+    proxyAllowlist: [],
+    proxyRequest: async () => ({ status: 200, data: {} }),
+    getRequestUserId: () => 'local-user',
+    readSecrets: async () => ({}),
+    resolveApiCredentials: async () => ({ baseUrl: 'https://api.example.com', apiKey: 'key', providerId: 'openai-compatible' }),
+    requireAdmin: () => true,
+    resolveDirectCredentials: () => ({ baseUrl: 'https://api.example.com', apiKey: 'key', providerId: 'openai-compatible' }),
+  });
+
+  const route = app.routes.find((item) => item.method === 'GET' && item.pathname === '/api/model-capabilities/resolve');
+  const res = createMockRes();
+  route.handler({ query: { providerId: 'openai-compatible', model: 'gpt-image-2' } }, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.source, 'matched-rules');
+  assert.equal(res.body.capabilities.imageGeneration, true);
+  assert.ok(res.body.matchedRules.some((rule) => rule.modelPattern === 'gpt-image-2*'));
   handlers.stopTextQueue();
 });
 

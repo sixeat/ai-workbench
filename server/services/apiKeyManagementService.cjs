@@ -31,6 +31,32 @@ function apiKeyQuota(repository, userId, maxUserApiKeys) {
   };
 }
 
+const API_KEY_CAPABILITY_KEYS = new Set([
+  'chat',
+  'imageGeneration',
+  'imageReference',
+  'multiImageReference',
+  'videoGeneration',
+]);
+
+function normalizeModelList(value) {
+  if (!Array.isArray(value)) return [];
+  return Array.from(new Set(
+    value
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  )).slice(0, 500);
+}
+
+function normalizeAllowedCapabilities(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const normalized = {};
+  for (const [key, enabled] of Object.entries(value)) {
+    if (API_KEY_CAPABILITY_KEYS.has(key)) normalized[key] = Boolean(enabled);
+  }
+  return normalized;
+}
+
 function apiKeyUpdateAuditMetadata(existing, next, body = {}) {
   const requestedIsEnabled = body.isEnabled !== undefined ? Boolean(body.isEnabled) : Boolean(existing?.isEnabled);
   const nextProviderId = next?.providerId || body.providerId || existing?.providerId || '';
@@ -40,6 +66,8 @@ function apiKeyUpdateAuditMetadata(existing, next, body = {}) {
     changedName: Boolean(body.name !== undefined && body.name !== existing?.name),
     changedProvider: Boolean(body.providerId !== undefined && body.providerId !== existing?.providerId),
     changedSecret: Boolean(body.apiKey),
+    changedModels: Boolean(body.models !== undefined),
+    changedAllowedCapabilities: Boolean(body.allowedCapabilities !== undefined),
     isEnabled: Boolean(next?.isEnabled ?? requestedIsEnabled),
     operation: 'update',
     previousIsEnabled: Boolean(existing?.isEnabled),
@@ -81,17 +109,17 @@ function createApiKeyManagementService({
     });
   }
 
-  function listApiKeys(req) {
+  function listApiKeys(req, { includeServer = true } = {}) {
     const userId = getRequestUserId(req);
     const query = listQuery(req.query);
-    const apiKeys = apiKeyRepository.listApiKeys(userId, true, query);
+    const apiKeys = apiKeyRepository.listApiKeys(userId, includeServer, query);
     return response(200, {
       apiKeys,
       count: apiKeys.length,
       limit: query.limit,
       offset: query.offset,
       quota: apiKeyQuota(apiKeyRepository, userId, maxUserApiKeys),
-      total: apiKeyRepository.countApiKeys(userId, true, query),
+      total: apiKeyRepository.countApiKeys(userId, includeServer, query),
     });
   }
 
@@ -119,11 +147,13 @@ function createApiKeyManagementService({
     }
 
     const apiKey = apiKeyRepository.upsertApiKey({
+      allowedCapabilities: normalizeAllowedCapabilities(body.allowedCapabilities),
       baseUrl: body.baseUrl || '',
       encryptedKey: encryptSecret(body.apiKey),
       id: body.id,
       isEnabled: body.isEnabled !== false,
       keyScope: existing?.keyScope || keyScope,
+      models: normalizeModelList(body.models),
       name: body.name || body.providerId,
       ownerUserId: existing?.ownerUserId || (keyScope === 'server' ? DEFAULT_SERVER_KEY_OWNER_USER_ID : userId),
       providerId: body.providerId,
@@ -143,11 +173,15 @@ function createApiKeyManagementService({
 
     const body = req.body || {};
     const apiKey = apiKeyRepository.upsertApiKey({
+      allowedCapabilities: body.allowedCapabilities !== undefined
+        ? normalizeAllowedCapabilities(body.allowedCapabilities)
+        : existing.allowedCapabilities,
       baseUrl: body.baseUrl ?? existing.baseUrl,
       encryptedKey: body.apiKey ? encryptSecret(body.apiKey) : existing.encryptedKey,
       id: existing.id,
       isEnabled: body.isEnabled ?? existing.isEnabled,
       keyScope: existing.keyScope,
+      models: body.models !== undefined ? normalizeModelList(body.models) : existing.models,
       name: body.name ?? existing.name,
       ownerUserId: existing.ownerUserId,
       providerId: body.providerId || existing.providerId,

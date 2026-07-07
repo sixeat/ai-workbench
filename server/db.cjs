@@ -31,6 +31,8 @@ function migrate() {
       name TEXT,
       base_url TEXT,
       encrypted_key TEXT,
+      models_json TEXT,
+      allowed_capabilities_json TEXT,
       is_enabled INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -198,6 +200,33 @@ function migrate() {
       updated_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS platform_models (
+      id TEXT PRIMARY KEY,
+      display_name TEXT NOT NULL,
+      description TEXT,
+      capability TEXT NOT NULL CHECK (capability IN ('chat', 'imageGeneration', 'videoGeneration')),
+      model TEXT NOT NULL,
+      capabilities_json TEXT,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      sort_order INTEGER NOT NULL DEFAULT 100,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS platform_model_routes (
+      id TEXT PRIMARY KEY,
+      platform_model_id TEXT NOT NULL,
+      api_key_id TEXT NOT NULL,
+      provider_id TEXT,
+      upstream_model TEXT,
+      priority INTEGER NOT NULL DEFAULT 100,
+      is_enabled INTEGER NOT NULL DEFAULT 1,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (platform_model_id) REFERENCES platform_models(id) ON DELETE CASCADE,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+    );
+
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -269,6 +298,8 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_invitation_codes_created ON invitation_codes(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_models_enabled ON platform_models(is_enabled, sort_order, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_platform_model_routes_model ON platform_model_routes(platform_model_id, is_enabled, priority);
   `);
 
   ensureColumn('users', 'username', 'TEXT');
@@ -278,6 +309,8 @@ function migrate() {
   ensureColumn('sessions', 'ip_address', 'TEXT');
   ensureColumn('sessions', 'user_agent', 'TEXT');
   ensureColumn('email_verifications', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('api_keys', 'models_json', 'TEXT');
+  ensureColumn('api_keys', 'allowed_capabilities_json', 'TEXT');
   ensureColumn('assets', 'size_bytes', 'INTEGER');
   ensureColumn('tasks', 'credit_cost', "INTEGER NOT NULL DEFAULT 0");
   ensureColumn('tasks', 'credit_status', "TEXT NOT NULL DEFAULT 'none'");
@@ -453,12 +486,54 @@ function rowToApiKey(row, includeSecret = false) {
     providerId: row.provider_id,
     name: row.name,
     baseUrl: row.base_url,
+    models: jsonParse(row.models_json, []),
+    allowedCapabilities: jsonParse(row.allowed_capabilities_json, {}),
     isEnabled: Boolean(row.is_enabled),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
   if (includeSecret) key.encryptedKey = row.encrypted_key;
   return key;
+}
+
+function rowToPlatformModel(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    displayName: row.display_name,
+    description: row.description || '',
+    capability: row.capability,
+    model: row.model,
+    capabilities: jsonParse(row.capabilities_json, {}),
+    isEnabled: Boolean(row.is_enabled),
+    sortOrder: Number(row.sort_order || 100),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToPlatformModelRoute(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    platformModelId: row.platform_model_id,
+    apiKeyId: row.api_key_id,
+    providerId: row.provider_id || '',
+    upstreamModel: row.upstream_model || '',
+    priority: Number(row.priority || 100),
+    isEnabled: Boolean(row.is_enabled),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    apiKey: row.key_name !== undefined
+      ? {
+        id: row.api_key_id,
+        name: row.key_name || '',
+        providerId: row.key_provider_id || '',
+        keyScope: row.key_scope || '',
+        isEnabled: Boolean(row.key_is_enabled),
+      }
+      : undefined,
+  };
 }
 
 function rowToUser(row) {
@@ -1111,11 +1186,11 @@ function upsertApiKey(apiKey) {
   db.prepare(`
     INSERT INTO api_keys (
       id, owner_user_id, key_scope, provider_id, name, base_url,
-      encrypted_key, is_enabled, created_at, updated_at
+      encrypted_key, models_json, allowed_capabilities_json, is_enabled, created_at, updated_at
     )
     VALUES (
       @id, @ownerUserId, @keyScope, @providerId, @name, @baseUrl,
-      @encryptedKey, @isEnabled, @createdAt, @updatedAt
+      @encryptedKey, @modelsJson, @allowedCapabilitiesJson, @isEnabled, @createdAt, @updatedAt
     )
     ON CONFLICT(id) DO UPDATE SET
       owner_user_id = excluded.owner_user_id,
@@ -1124,6 +1199,8 @@ function upsertApiKey(apiKey) {
       name = excluded.name,
       base_url = excluded.base_url,
       encrypted_key = COALESCE(excluded.encrypted_key, api_keys.encrypted_key),
+      models_json = excluded.models_json,
+      allowed_capabilities_json = excluded.allowed_capabilities_json,
       is_enabled = excluded.is_enabled,
       updated_at = excluded.updated_at
   `).run({
@@ -1134,6 +1211,8 @@ function upsertApiKey(apiKey) {
     name: apiKey.name || null,
     baseUrl: apiKey.baseUrl || null,
     encryptedKey: apiKey.encryptedKey || null,
+    modelsJson: jsonStringify(Array.isArray(apiKey.models) ? apiKey.models : []),
+    allowedCapabilitiesJson: jsonStringify(apiKey.allowedCapabilities || {}),
     isEnabled: apiKey.isEnabled === false ? 0 : 1,
     createdAt: apiKey.createdAt || now,
     updatedAt: now,
@@ -1224,6 +1303,175 @@ function deleteApiKey(id, userId = DEFAULT_USER_ID) {
     DELETE FROM api_keys
     WHERE id = ? AND (owner_user_id = ? OR key_scope = 'server')
   `).run(id, userId);
+  return result.changes > 0;
+}
+
+function platformModelListOptions(options = {}) {
+  return {
+    capability: ['chat', 'imageGeneration', 'videoGeneration'].includes(options.capability) ? options.capability : '',
+    includeDisabled: Boolean(options.includeDisabled),
+    limit: Math.max(1, Math.min(500, Number(options.limit || 100) || 100)),
+    offset: Math.max(0, Number(options.offset || 0) || 0),
+    search: String(options.search || options.q || '').trim().toLowerCase(),
+  };
+}
+
+function platformModelWhereClause(options = {}) {
+  const query = platformModelListOptions(options);
+  const conditions = [];
+  const params = [];
+
+  if (!query.includeDisabled) conditions.push('is_enabled = 1');
+  if (query.capability) {
+    conditions.push('capability = ?');
+    params.push(query.capability);
+  }
+  if (query.search) {
+    conditions.push('(LOWER(display_name) LIKE ? OR LOWER(model) LIKE ? OR LOWER(COALESCE(description, \'\')) LIKE ?)');
+    const like = `%${query.search}%`;
+    params.push(like, like, like);
+  }
+
+  return {
+    clause: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+    query,
+  };
+}
+
+function listPlatformModels(options = {}) {
+  const { clause, params, query } = platformModelWhereClause(options);
+  return db.prepare(`
+    SELECT * FROM platform_models
+    ${clause}
+    ORDER BY sort_order ASC, updated_at DESC, display_name ASC
+    LIMIT ? OFFSET ?
+  `).all(...params, query.limit, query.offset).map(rowToPlatformModel);
+}
+
+function countPlatformModels(options = {}) {
+  const { clause, params } = platformModelWhereClause(options);
+  const row = db.prepare(`
+    SELECT COUNT(*) AS count
+    FROM platform_models
+    ${clause}
+  `).get(...params);
+  return Number(row?.count || 0);
+}
+
+function getPlatformModel(id) {
+  return rowToPlatformModel(db.prepare('SELECT * FROM platform_models WHERE id = ?').get(id));
+}
+
+function upsertPlatformModel(model) {
+  const now = new Date().toISOString();
+  const id = model.id || require('crypto').randomUUID();
+  db.prepare(`
+    INSERT INTO platform_models (
+      id, display_name, description, capability, model, capabilities_json,
+      is_enabled, sort_order, created_at, updated_at
+    )
+    VALUES (
+      @id, @displayName, @description, @capability, @model, @capabilitiesJson,
+      @isEnabled, @sortOrder, @createdAt, @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      display_name = excluded.display_name,
+      description = excluded.description,
+      capability = excluded.capability,
+      model = excluded.model,
+      capabilities_json = excluded.capabilities_json,
+      is_enabled = excluded.is_enabled,
+      sort_order = excluded.sort_order,
+      updated_at = excluded.updated_at
+  `).run({
+    id,
+    displayName: model.displayName,
+    description: model.description || null,
+    capability: model.capability,
+    model: model.model,
+    capabilitiesJson: jsonStringify(model.capabilities || {}),
+    isEnabled: model.isEnabled === false ? 0 : 1,
+    sortOrder: Number.isFinite(Number(model.sortOrder)) ? Number(model.sortOrder) : 100,
+    createdAt: model.createdAt || now,
+    updatedAt: now,
+  });
+  return getPlatformModel(id);
+}
+
+function deletePlatformModel(id) {
+  const result = db.prepare('DELETE FROM platform_models WHERE id = ?').run(id);
+  return result.changes > 0;
+}
+
+function listPlatformModelRoutes(platformModelId, options = {}) {
+  const includeDisabled = Boolean(options.includeDisabled);
+  const enabledClause = includeDisabled ? '' : 'AND platform_model_routes.is_enabled = 1';
+  return db.prepare(`
+    SELECT
+      platform_model_routes.*,
+      api_keys.name AS key_name,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled
+    FROM platform_model_routes
+    JOIN api_keys ON api_keys.id = platform_model_routes.api_key_id
+    WHERE platform_model_routes.platform_model_id = ?
+      ${enabledClause}
+    ORDER BY platform_model_routes.priority ASC, platform_model_routes.created_at ASC
+  `).all(platformModelId).map(rowToPlatformModelRoute);
+}
+
+function getPlatformModelRoute(id) {
+  return rowToPlatformModelRoute(db.prepare(`
+    SELECT
+      platform_model_routes.*,
+      api_keys.name AS key_name,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled
+    FROM platform_model_routes
+    JOIN api_keys ON api_keys.id = platform_model_routes.api_key_id
+    WHERE platform_model_routes.id = ?
+  `).get(id));
+}
+
+function upsertPlatformModelRoute(route) {
+  const now = new Date().toISOString();
+  const id = route.id || require('crypto').randomUUID();
+  db.prepare(`
+    INSERT INTO platform_model_routes (
+      id, platform_model_id, api_key_id, provider_id, upstream_model,
+      priority, is_enabled, created_at, updated_at
+    )
+    VALUES (
+      @id, @platformModelId, @apiKeyId, @providerId, @upstreamModel,
+      @priority, @isEnabled, @createdAt, @updatedAt
+    )
+    ON CONFLICT(id) DO UPDATE SET
+      platform_model_id = excluded.platform_model_id,
+      api_key_id = excluded.api_key_id,
+      provider_id = excluded.provider_id,
+      upstream_model = excluded.upstream_model,
+      priority = excluded.priority,
+      is_enabled = excluded.is_enabled,
+      updated_at = excluded.updated_at
+  `).run({
+    id,
+    platformModelId: route.platformModelId,
+    apiKeyId: route.apiKeyId,
+    providerId: route.providerId || null,
+    upstreamModel: route.upstreamModel || null,
+    priority: Number.isFinite(Number(route.priority)) ? Number(route.priority) : 100,
+    isEnabled: route.isEnabled === false ? 0 : 1,
+    createdAt: route.createdAt || now,
+    updatedAt: now,
+  });
+  return getPlatformModelRoute(id);
+}
+
+function deletePlatformModelRoute(id) {
+  const result = db.prepare('DELETE FROM platform_model_routes WHERE id = ?').run(id);
   return result.changes > 0;
 }
 
@@ -2145,6 +2393,7 @@ module.exports = {
   countAuditLogs,
   countInvitationCodes,
   countModelCapabilities,
+  countPlatformModels,
   countWorkflowVersions,
   countWorkflows,
   countUsers,
@@ -2175,7 +2424,11 @@ module.exports = {
   upsertWorkflow,
   createWorkflowVersion,
   deleteWorkflow,
+  deletePlatformModel,
+  deletePlatformModelRoute,
   getWorkflowVersionForUser,
+  getPlatformModel,
+  getPlatformModelRoute,
   listWorkflowVersions,
   restoreWorkflowVersion,
   listTasks,
@@ -2210,10 +2463,14 @@ module.exports = {
   linkTaskAsset,
   upsertModelCapability,
   listModelCapabilities,
+  listPlatformModels,
+  listPlatformModelRoutes,
   upsertApiKey,
   getApiKey,
   getApiKeyForUser,
   listApiKeys,
   deleteApiKey,
+  upsertPlatformModel,
+  upsertPlatformModelRoute,
   upsertBootstrapUser,
 };

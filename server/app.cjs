@@ -32,6 +32,8 @@ const { registerWorkflowRoutes } = require('./routes/workflowRoutes.cjs');
 const { registerProviderRoutes } = require('./routes/providerRoutes.cjs');
 const { registerHealthRoutes } = require('./routes/healthRoutes.cjs');
 const { registerCreditRoutes } = require('./routes/creditRoutes.cjs');
+const { registerPlatformModelRoutes } = require('./routes/platformModelRoutes.cjs');
+const { platformModelRepository } = require('./repositories/platformModelRepository.cjs');
 const { createApiKeyTestService } = require('./services/apiKeyTestService.cjs');
 const { createCredentialService } = require('./services/credentialService.cjs');
 const { joinUrl, proxyRequest } = require('./services/proxyService.cjs');
@@ -85,6 +87,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     keyEncryptionSecret,
     deploymentMode: deployment,
     allowDirectCredentials,
+    platformModelRepository,
   });
   const creditService = createCreditService();
   const taskService = createTaskService({
@@ -206,6 +209,11 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
   registerCreditRoutes(app, {
     creditService,
     getRequestUserId,
+    requireAdmin,
+  });
+
+  registerPlatformModelRoutes(app, {
+    platformModelRepository,
     requireAdmin,
   });
 

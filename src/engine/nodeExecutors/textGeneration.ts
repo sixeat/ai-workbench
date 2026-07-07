@@ -8,6 +8,7 @@ import type { NodeConfig } from '../../types/nodes';
 
 export interface TextGenerationOptions {
   instanceId?: string;
+  platformModelId?: string;
   model?: string;
   system?: string;
   prompt: string;
@@ -22,7 +23,7 @@ export interface TextGenerationResult {
   response?: unknown;
 }
 
-export type ModelSource = 'inherit' | 'globalDefault' | 'manual' | 'localOnly';
+export type ModelSource = 'inherit' | 'globalDefault' | 'manual' | 'platform' | 'localOnly';
 
 export interface ResolvedTextGenerationOptions extends TextGenerationOptions {
   source: Exclude<ModelSource, 'localOnly'>;
@@ -49,12 +50,13 @@ function getGlobalDefaultModelContext(): TextModelContext | null {
 }
 
 export function makeModelContext(
-  config: { instanceId?: string; model?: string },
+  config: { instanceId?: string; model?: string; platformModelId?: string },
   meta: Partial<TextModelContext> = {}
 ): TextModelContext | null {
-  if (!config.instanceId) return null;
+  if (!config.instanceId && !config.platformModelId) return null;
   return {
-    instanceId: String(config.instanceId),
+    instanceId: config.instanceId ? String(config.instanceId) : undefined,
+    platformModelId: config.platformModelId ? String(config.platformModelId) : undefined,
     model: String(config.model || 'gpt-4o'),
     ...meta,
   };
@@ -86,13 +88,26 @@ export function resolveTextGenerationOptions(
     };
   }
 
+  if (modelSource === 'platform') {
+    if (!config.platformModelId) return null;
+    return {
+      ...defaults,
+      ...base,
+      platformModelId: String(config.platformModelId),
+      model: String(config.model || defaults.model || ''),
+      prompt: defaults.prompt || '',
+      source: 'platform',
+    };
+  }
+
   if (modelSource === 'inherit') {
     const upstream = context.modelContext;
-    if (upstream?.instanceId) {
+    if (upstream?.instanceId || upstream?.platformModelId) {
       return {
         ...defaults,
         ...base,
         instanceId: upstream.instanceId,
+        platformModelId: upstream.platformModelId,
         model: upstream.model || defaults.model || 'gpt-4o',
         prompt: defaults.prompt || '',
         source: 'inherit',
@@ -130,10 +145,33 @@ function responseTask(response: unknown): unknown {
 }
 
 export async function generateTextWithMetadata(options: TextGenerationOptions): Promise<TextGenerationResult> {
-  if (!options.instanceId) throw new Error('请选择 API 实例');
+  if (!options.instanceId && !options.platformModelId) throw new Error('请选择 API 实例');
   if (!options.prompt.trim()) throw new Error('文本生成需要 prompt 输入');
 
-  const runtimeConfig = getInstanceRuntimeConfig(options.instanceId);
+  if (options.platformModelId) {
+    const response = await callOpenAIChat(
+      '',
+      '',
+      {
+        model: options.model || '',
+        messages: [
+          ...(options.system ? [{ role: 'system', content: options.system }] : []),
+          { role: 'user', content: options.prompt },
+        ],
+        temperature: options.temperature ?? 0.7,
+        max_tokens: options.maxTokens ?? 2000,
+        upstreamTaskIds: options.upstreamTaskIds,
+      },
+      { platformModelId: options.platformModelId }
+    );
+    return {
+      text: response.choices[0]?.message?.content || '',
+      task: responseTask(response),
+      response,
+    };
+  }
+
+  const runtimeConfig = getInstanceRuntimeConfig(options.instanceId || '');
   if (!runtimeConfig) throw new Error('API 实例配置无效');
 
   const { baseUrl, apiKey, apiKeyId, provider } = runtimeConfig;

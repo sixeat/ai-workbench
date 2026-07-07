@@ -51,6 +51,7 @@ const VIDEO_MODE_OPTIONS = [
 const MODEL_SOURCE_OPTIONS = [
   { label: '继承上游模型', value: 'inherit' },
   { label: '使用全局默认模型', value: 'globalDefault' },
+  { label: '使用平台模型', value: 'platform' },
   { label: '手动指定模型', value: 'manual' },
   { label: '仅本地规则', value: 'localOnly' },
 ];

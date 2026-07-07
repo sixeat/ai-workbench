@@ -291,6 +291,14 @@ test('model-service exposes provider templates and model capability presets to a
     });
     assert.equal(presets.status, 200);
     assert.ok(presets.data.count > 0);
+
+    const resolved = await fetchJson(`${baseUrl}/api/model-capabilities/resolve?providerId=openai-compatible&model=gpt-image-2`, {
+      headers: internalHeaders(user),
+    });
+    assert.equal(resolved.status, 200);
+    assert.equal(resolved.data.source, 'matched-rules');
+    assert.equal(resolved.data.capabilities.imageGeneration, true);
+    assert.ok(resolved.data.matchedRules.some((rule) => rule.modelPattern === 'gpt-image-2*'));
   });
 });
 

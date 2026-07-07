@@ -22,9 +22,11 @@ function printStartup() {
   console.log('    GET  /api/tasks    - task history');
   console.log('    GET  /api/workflows - workflows');
   console.log('    GET  /api/providers - provider templates');
+  console.log('    GET  /api/platform-models - published platform models');
   console.log('    GET  /api/assets   - assets');
   console.log('    GET  /api/assets/:id');
   console.log('    GET  /api/model-capabilities');
+  console.log('    GET  /api/model-capabilities/resolve');
   console.log('    GET  /api/model-capability-presets');
   console.log('    GET  /api/health');
   console.log('    GET  /api/admin/health');
