@@ -221,7 +221,7 @@ test('split api and worker processes share the database and complete queued text
     PROXY_HOST: '127.0.0.1',
     WORKBENCH_ALLOW_PRIVATE_MEDIA_FETCH: 'true',
     WORKBENCH_ACCESS_TOKEN: '',
-    WORKBENCH_ADMIN_TOKEN: '',
+    WORKBENCH_ADMIN_TOKEN: 'split-admin-token',
     WORKBENCH_DATA_DIR: tempDir,
     WORKBENCH_DB_PATH: path.join(tempDir, 'test.sqlite'),
     WORKBENCH_DEPLOYMENT_MODE: 'local',
@@ -263,6 +263,20 @@ test('split api and worker processes share the database and complete queued text
     });
     assert.equal(savedApiKey.status, 201);
     assert.ok(savedApiKey.data.apiKey?.id);
+
+    const creditGrant = await fetchJson(`${apiBaseUrl}/api/admin/credits/adjust`, {
+      method: 'POST',
+      headers: {
+        'x-workbench-admin-token': 'split-admin-token',
+      },
+      body: JSON.stringify({
+        amount: 500,
+        reason: 'split process integration test',
+        userId: 'local-user',
+      }),
+    });
+    assert.equal(creditGrant.status, 200);
+    assert.equal(creditGrant.data.account.balance, 500);
 
     const created = await fetchJson(`${apiBaseUrl}/api/chat`, {
       method: 'POST',

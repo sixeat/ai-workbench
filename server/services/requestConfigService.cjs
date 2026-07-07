@@ -11,13 +11,13 @@ function parseMegabyteLimit(value, fallbackMb) {
   return Math.floor(megabytes * 1024 * 1024);
 }
 
-function resolveSessionCookieOptions(env = {}) {
+function resolveSessionCookieOptions(env = {}, mode = 'server') {
   return {
     sameSite: env.WORKBENCH_COOKIE_SAMESITE || 'Lax',
     ...(env.WORKBENCH_COOKIE_DOMAIN ? { domain: env.WORKBENCH_COOKIE_DOMAIN } : {}),
     ...(env.WORKBENCH_COOKIE_SECURE !== undefined
       ? { secure: parseBoolean(env.WORKBENCH_COOKIE_SECURE, false) }
-      : {}),
+      : { secure: mode === 'server' }),
   };
 }
 
@@ -75,7 +75,7 @@ function resolveRequestConfig(env = {}, mode = 'server') {
     rateLimits: resolveRateLimits(env, mode),
     requireInvitationCode: env.WORKBENCH_REQUIRE_INVITATION_CODE !== 'false',
     requireLogin: env.WORKBENCH_REQUIRE_LOGIN !== 'false',
-    sessionCookieOptions: resolveSessionCookieOptions(env),
+    sessionCookieOptions: resolveSessionCookieOptions(env, mode),
     sessionTtlDays: parsePositiveInt(env.WORKBENCH_SESSION_TTL_DAYS, 14),
     taskQueues: resolveTaskQueueConfig(env),
     trustForwardedFor: env.WORKBENCH_TRUST_PROXY === 'true',

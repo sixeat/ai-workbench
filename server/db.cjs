@@ -68,6 +68,9 @@ function migrate() {
       provider_id TEXT,
       model TEXT,
       status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+      credit_cost INTEGER NOT NULL DEFAULT 0,
+      credit_status TEXT NOT NULL DEFAULT 'none' CHECK (credit_status IN ('none', 'free', 'charged', 'refunded')),
+      credit_key_scope TEXT,
       input_json TEXT,
       output_json TEXT,
       error_json TEXT,
@@ -76,6 +79,34 @@ function migrate() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS credit_accounts (
+      user_id TEXT PRIMARY KEY,
+      balance INTEGER NOT NULL DEFAULT 0,
+      reserved_balance INTEGER NOT NULL DEFAULT 0,
+      total_granted INTEGER NOT NULL DEFAULT 0,
+      total_used INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS credit_transactions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      task_id TEXT,
+      type TEXT NOT NULL CHECK (type IN ('grant', 'debit', 'refund', 'admin_adjustment', 'free_usage')),
+      amount INTEGER NOT NULL,
+      balance_after INTEGER NOT NULL,
+      reserved_after INTEGER NOT NULL DEFAULT 0,
+      actor_user_id TEXT,
+      description TEXT,
+      metadata_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id),
+      FOREIGN KEY (actor_user_id) REFERENCES users(id)
     );
 
     CREATE TABLE IF NOT EXISTS workflows (
@@ -227,6 +258,9 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_asset_collections_user_created ON asset_collections(user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_asset_collection_items_collection ON asset_collection_items(collection_id, sort_order, created_at);
     CREATE INDEX IF NOT EXISTS idx_tasks_user_created ON tasks(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_credit_transactions_user_created ON credit_transactions(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_credit_transactions_task ON credit_transactions(task_id);
+    CREATE INDEX IF NOT EXISTS idx_credit_transactions_created ON credit_transactions(created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_task_outputs_task ON task_outputs(task_id);
     CREATE INDEX IF NOT EXISTS idx_task_logs_task_created ON task_logs(task_id, created_at ASC);
     CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
@@ -245,8 +279,12 @@ function migrate() {
   ensureColumn('sessions', 'user_agent', 'TEXT');
   ensureColumn('email_verifications', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('assets', 'size_bytes', 'INTEGER');
+  ensureColumn('tasks', 'credit_cost', "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn('tasks', 'credit_status', "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn('tasks', 'credit_key_scope', 'TEXT');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_credit_status ON tasks(credit_status, status)');
 }
 
 function ensureDefaultUser() {
@@ -263,6 +301,17 @@ function ensureDefaultUser() {
         updated_at = ?
     WHERE id = ?
   `).run('local', 'local@ai-workbench.local', now, DEFAULT_USER_ID);
+}
+
+function ensureCreditAccountsForExistingUsers() {
+  const now = new Date().toISOString();
+  db.prepare(`
+    INSERT OR IGNORE INTO credit_accounts (
+      user_id, balance, reserved_balance, total_granted, total_used, created_at, updated_at
+    )
+    SELECT id, 0, 0, 0, 0, ?, ?
+    FROM users
+  `).run(now, now);
 }
 
 function ensureColumn(table, column, definition) {
@@ -320,6 +369,9 @@ function rowToTask(row) {
     providerId: row.provider_id,
     model: row.model,
     status: row.status,
+    creditCost: Number(row.credit_cost || 0),
+    creditStatus: row.credit_status || 'none',
+    creditKeyScope: row.credit_key_scope || '',
     input: jsonParse(row.input_json, null),
     output: jsonParse(row.output_json, null),
     error: jsonParse(row.error_json, null),
@@ -1024,10 +1076,12 @@ function createTask(task) {
   db.prepare(`
     INSERT INTO tasks (
       id, user_id, node_type, provider_id, model, status,
+      credit_cost, credit_status, credit_key_scope,
       input_json, output_json, error_json, duration_ms, retry_of, created_at, updated_at
     )
     VALUES (
       @id, @userId, @nodeType, @providerId, @model, @status,
+      @creditCost, @creditStatus, @creditKeyScope,
       @inputJson, @outputJson, @errorJson, @durationMs, @retryOf, @createdAt, @updatedAt
     )
   `).run({
@@ -1037,6 +1091,9 @@ function createTask(task) {
     providerId: task.providerId || null,
     model: task.model || null,
     status: task.status || 'running',
+    creditCost: Math.max(0, Number(task.creditCost || 0) || 0),
+    creditStatus: task.creditStatus || 'none',
+    creditKeyScope: task.creditKeyScope || null,
     inputJson: jsonStringify(task.input),
     outputJson: jsonStringify(task.output),
     errorJson: jsonStringify(task.error),
@@ -2068,6 +2125,7 @@ function countModelCapabilities(options = {}) {
 
 migrate();
 ensureDefaultUser();
+ensureCreditAccountsForExistingUsers();
 
 module.exports = {
   DEFAULT_USER_ID,

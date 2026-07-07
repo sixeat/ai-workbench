@@ -120,6 +120,7 @@ function queuedTaskResponse(task) {
 }
 
 function createGenerationTaskRequestService({
+  creditService,
   generationWorker,
   getRequestUserId = (req) => req.authUser?.id || 'local-user',
   imageGenerationService,
@@ -130,12 +131,31 @@ function createGenerationTaskRequestService({
   function enqueueImageTask(req) {
     const userId = getRequestUserId(req);
     const body = req.body || {};
-    const task = imageGenerationService.createImageTask(userId, {
+    const taskBody = {
       ...body,
       publicBaseUrl: getPublicBaseUrl(req),
-    }, 'queued');
+    };
+    let queueBody = body;
+    const task = creditService
+      ? creditService.createBillableTask({
+        body: taskBody,
+        createTask: (nextBody) => {
+          queueBody = {
+            ...body,
+            billing: nextBody.billing,
+            creditCost: nextBody.creditCost,
+            creditKeyScope: nextBody.creditKeyScope,
+            creditStatus: nextBody.creditStatus,
+          };
+          return imageGenerationService.createImageTask(userId, nextBody, 'queued');
+        },
+        nodeType: 'image',
+        requestMeta: requestSnapshot(req),
+        userId,
+      }).task
+      : imageGenerationService.createImageTask(userId, taskBody, 'queued');
     generationWorker.queueGenerationTask(task, {
-      body,
+      body: queueBody,
       req: requestSnapshot(req),
     });
     return queuedTaskResponse(task);
@@ -153,12 +173,31 @@ function createGenerationTaskRequestService({
   function enqueueVideoTask(req) {
     const userId = getRequestUserId(req);
     const body = req.body || {};
-    const task = videoGenerationService.createVideoTask(userId, {
+    const taskBody = {
       ...body,
       publicBaseUrl: getPublicBaseUrl(req),
-    }, 'queued');
+    };
+    let queueBody = body;
+    const task = creditService
+      ? creditService.createBillableTask({
+        body: taskBody,
+        createTask: (nextBody) => {
+          queueBody = {
+            ...body,
+            billing: nextBody.billing,
+            creditCost: nextBody.creditCost,
+            creditKeyScope: nextBody.creditKeyScope,
+            creditStatus: nextBody.creditStatus,
+          };
+          return videoGenerationService.createVideoTask(userId, nextBody, 'queued');
+        },
+        nodeType: 'video',
+        requestMeta: requestSnapshot(req),
+        userId,
+      }).task
+      : videoGenerationService.createVideoTask(userId, taskBody, 'queued');
     generationWorker.queueGenerationTask(task, {
-      body,
+      body: queueBody,
       req: requestSnapshot(req),
     });
     return queuedTaskResponse(task);
@@ -184,13 +223,32 @@ function createGenerationTaskRequestService({
 
   async function enqueueImageRetry({ req, userId, task }) {
     const body = imageRetryBody(task);
-    const nextTask = imageGenerationService.createImageTask(userId, {
+    const taskBody = {
       ...body,
       publicBaseUrl: getPublicBaseUrl(req),
-    }, 'queued');
+    };
+    let queueBody = body;
+    const nextTask = creditService
+      ? creditService.createBillableTask({
+        body: taskBody,
+        createTask: (nextBody) => {
+          queueBody = {
+            ...body,
+            billing: nextBody.billing,
+            creditCost: nextBody.creditCost,
+            creditKeyScope: nextBody.creditKeyScope,
+            creditStatus: nextBody.creditStatus,
+          };
+          return imageGenerationService.createImageTask(userId, nextBody, 'queued');
+        },
+        nodeType: 'image',
+        requestMeta: { ...requestSnapshot(req), retryOf: task.id },
+        userId,
+      }).task
+      : imageGenerationService.createImageTask(userId, taskBody, 'queued');
     addRetryLogs(taskRepository, task, nextTask);
     generationWorker.queueGenerationTask(nextTask, {
-      body,
+      body: queueBody,
       req: requestSnapshot(req),
     });
     return queuedTaskResponse(nextTask);
@@ -198,13 +256,32 @@ function createGenerationTaskRequestService({
 
   async function enqueueVideoRetry({ req, userId, task }) {
     const body = videoRetryBody(task);
-    const nextTask = videoGenerationService.createVideoTask(userId, {
+    const taskBody = {
       ...body,
       publicBaseUrl: getPublicBaseUrl(req),
-    }, 'queued');
+    };
+    let queueBody = body;
+    const nextTask = creditService
+      ? creditService.createBillableTask({
+        body: taskBody,
+        createTask: (nextBody) => {
+          queueBody = {
+            ...body,
+            billing: nextBody.billing,
+            creditCost: nextBody.creditCost,
+            creditKeyScope: nextBody.creditKeyScope,
+            creditStatus: nextBody.creditStatus,
+          };
+          return videoGenerationService.createVideoTask(userId, nextBody, 'queued');
+        },
+        nodeType: 'video',
+        requestMeta: { ...requestSnapshot(req), retryOf: task.id },
+        userId,
+      }).task
+      : videoGenerationService.createVideoTask(userId, taskBody, 'queued');
     addRetryLogs(taskRepository, task, nextTask);
     generationWorker.queueGenerationTask(nextTask, {
-      body,
+      body: queueBody,
       req: requestSnapshot(req),
     });
     return queuedTaskResponse(nextTask);

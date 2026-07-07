@@ -93,6 +93,76 @@ function formatDuration(value?: number): string {
   return `${(value / 1000).toFixed(1)}s`;
 }
 
+function numericValue(value: unknown, fallback: number): number {
+  if (value && typeof value === 'object' && 'value' in value) return numericValue((value as { value?: unknown }).value, fallback);
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
+function positiveInteger(value: unknown, fallback = 1): number {
+  return Math.max(1, Math.ceil(numericValue(value, fallback)));
+}
+
+function shotListLength(value: unknown): number {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const record = value as { type?: unknown; items?: unknown };
+    if (record.type === 'shotList' && Array.isArray(record.items)) return record.items.length;
+  }
+  return 0;
+}
+
+function estimateCreditCost(node: Node<NodeData>, instance: { keyScope?: 'user' | 'server' } | null) {
+  const type = node.data.type;
+  if (!GENERATIVE_NODE_TYPES.has(type)) return null;
+  if (MODEL_SOURCE_NODE_TYPES.has(type) && String(node.data.config.modelSource || 'inherit') === 'localOnly') {
+    return {
+      cost: 0,
+      detail: '本地规则不调用服务器 Key',
+      free: true,
+      keyScope: 'local',
+    };
+  }
+
+  const keyScope = instance?.keyScope === 'user' ? 'user' : 'server';
+  if (keyScope === 'user') {
+    return {
+      cost: 0,
+      detail: '当前选择用户自己的 API Key',
+      free: true,
+      keyScope,
+    };
+  }
+
+  if (type === 'imageGen' || type === 'imageToImage') {
+    const count = positiveInteger(node.data.inputs.count, positiveInteger(node.data.config.n ?? node.data.config.count, 1));
+    const shotCount = shotListLength(node.data.inputs.prompt) || 1;
+    const quantity = count * shotCount;
+    return {
+      cost: quantity * 10,
+      detail: `${quantity} 张图 × 10 积分`,
+      free: false,
+      keyScope,
+    };
+  }
+
+  if (type === 'videoGen' || type === 'multiImageVideo') {
+    const duration = positiveInteger(node.data.inputs.duration, positiveInteger(node.data.config.duration, 5));
+    return {
+      cost: duration * 20,
+      detail: `${duration} 秒 × 20 积分`,
+      free: false,
+      keyScope,
+    };
+  }
+
+  return {
+    cost: 1,
+    detail: '文本任务 × 1 积分',
+    free: false,
+    keyScope,
+  };
+}
+
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <div className="space-y-2 rounded-lg border border-panel-border bg-canvas-bg/70 p-3">
@@ -183,6 +253,10 @@ export function PropertiesPanel() {
   }, [instances, selectedInstanceId]);
 
   const selectedInstance = selectedInstanceId ? instances[selectedInstanceId] : null;
+  const creditEstimate = useMemo(
+    () => selectedNode ? estimateCreditCost(selectedNode, selectedInstance) : null,
+    [selectedInstance, selectedNode]
+  );
   const modelCapabilities = useMemo(
     () => resolveModelCapabilities(capabilityRecords, selectedInstance?.providerId, selectedModel),
     [capabilityRecords, selectedInstance?.providerId, selectedModel]
@@ -601,6 +675,32 @@ export function PropertiesPanel() {
             {nodeStatusLabel(selectedNode.data.status)}
           </span>
         </div>
+
+        {creditEstimate && (
+          <Section title="预计消耗">
+            <div className="grid grid-cols-2 gap-1.5 text-[10px]">
+              <Metric
+                label="积分"
+                value={creditEstimate.free ? '免费' : `${creditEstimate.cost} 积分`}
+                tone={creditEstimate.free ? 'success' : 'warning'}
+              />
+              <Metric
+                label="Key"
+                value={
+                  creditEstimate.keyScope === 'user'
+                    ? '用户 Key'
+                    : creditEstimate.keyScope === 'server'
+                      ? '服务器 Key'
+                      : '本地规则'
+                }
+                tone={creditEstimate.free ? 'success' : 'warning'}
+              />
+            </div>
+            <p className="text-[10px] leading-4 text-gray-500">
+              {creditEstimate.detail}。实际扣费以后端任务创建结果为准。
+            </p>
+          </Section>
+        )}
 
         {lastRun && (
           <Section title="最近运行">

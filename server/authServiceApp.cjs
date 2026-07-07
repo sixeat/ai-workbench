@@ -6,6 +6,7 @@ const { assetRepository } = require('./repositories/assetRepository.cjs');
 const { authRepository } = require('./repositories/authRepository.cjs');
 const { taskRepository } = require('./repositories/taskRepository.cjs');
 const { createEmailCodeRateLimit, registerAuthRoutes } = require('./routes/authRoutes.cjs');
+const { registerCreditRoutes } = require('./routes/creditRoutes.cjs');
 const { registerHealthRoutes } = require('./routes/healthRoutes.cjs');
 const { bootstrapAdminUser } = require('./services/bootstrapService.cjs');
 const {
@@ -19,6 +20,7 @@ const { createRequestUserIdResolver, createRequireAdmin } = require('./services/
 const { resolveRequestConfig } = require('./services/requestConfigService.cjs');
 const { createSecurityHeadersMiddleware } = require('./services/securityHeadersService.cjs');
 const { createSessionMiddleware } = require('./services/sessionMiddlewareService.cjs');
+const { createCreditService } = require('./services/creditService.cjs');
 const {
   deploymentMode,
   resolveAdminToken,
@@ -59,6 +61,7 @@ function createAuthServiceApp({ env = process.env } = {}) {
     defaultUserId: DEFAULT_USER_ID,
     trustClientUserId: false,
   });
+  const creditService = createCreditService();
 
   bootstrapAdminUser({
     env,
@@ -99,6 +102,12 @@ function createAuthServiceApp({ env = process.env } = {}) {
     sessionCookieOptions: requestConfig.sessionCookieOptions,
     sessionTtlDays: requestConfig.sessionTtlDays,
     windowMs: requestConfig.rateLimits.windowMs,
+  });
+
+  registerCreditRoutes(app, {
+    creditService,
+    getRequestUserId,
+    requireAdmin,
   });
 
   registerHealthRoutes(app, {

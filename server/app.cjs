@@ -31,6 +31,7 @@ const { registerGenerationRoutes } = require('./routes/generationRoutes.cjs');
 const { registerWorkflowRoutes } = require('./routes/workflowRoutes.cjs');
 const { registerProviderRoutes } = require('./routes/providerRoutes.cjs');
 const { registerHealthRoutes } = require('./routes/healthRoutes.cjs');
+const { registerCreditRoutes } = require('./routes/creditRoutes.cjs');
 const { createApiKeyTestService } = require('./services/apiKeyTestService.cjs');
 const { createCredentialService } = require('./services/credentialService.cjs');
 const { joinUrl, proxyRequest } = require('./services/proxyService.cjs');
@@ -41,6 +42,7 @@ const { createApiGateway } = require('./services/gatewayService.cjs');
 const { resolveRequestConfig } = require('./services/requestConfigService.cjs');
 const { createRequestUserIdResolver, createRequireAdmin } = require('./services/requestIdentityService.cjs');
 const { createTaskRetryDispatcher } = require('./services/taskRetryDispatcher.cjs');
+const { createCreditService } = require('./services/creditService.cjs');
 
 const SAFE_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 
@@ -84,7 +86,9 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     deploymentMode: deployment,
     allowDirectCredentials,
   });
+  const creditService = createCreditService();
   const taskService = createTaskService({
+    creditService,
     publicAsset,
   });
   const secretService = createSecretService({
@@ -167,6 +171,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     resolveDirectCredentials: credentialService.resolveDirectCredentials,
     allowSyncGeneration: enableSyncGeneration,
     autoStartQueue: shouldStartWorkers,
+    creditService,
     taskQueuePollIntervalMs: taskQueues.pollIntervalMs,
     textQueueConcurrency: taskQueues.textConcurrency,
   });
@@ -181,6 +186,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     resolveApiCredentials: credentialService.resolveApiCredentials,
     allowSyncGeneration: enableSyncGeneration,
     autoStartQueue: shouldStartWorkers,
+    creditService,
     generationQueueConcurrency: taskQueues.generationConcurrency,
     taskQueuePollIntervalMs: taskQueues.pollIntervalMs,
     uploadLimits: {
@@ -195,6 +201,12 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     maxUserApiKeys,
     requireAdmin,
     testApiKey: apiKeyTestService.testApiKey,
+  });
+
+  registerCreditRoutes(app, {
+    creditService,
+    getRequestUserId,
+    requireAdmin,
   });
 
   registerTaskRoutes(app, {

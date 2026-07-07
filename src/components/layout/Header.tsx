@@ -1,4 +1,4 @@
-import { CheckSquare, ChevronDown, Folder, History, Images, LockKeyhole, LogOut, Play, Save, ShieldCheck, Square, Terminal, Zap } from 'lucide-react';
+import { CheckSquare, ChevronDown, Coins, Folder, History, Images, LockKeyhole, LogOut, Play, Save, ShieldCheck, Square, Terminal, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { executeWorkflow } from '../../engine/WorkflowEngine';
 import { useWorkflowStore } from '../../stores/workflowStore';
@@ -12,7 +12,9 @@ interface HeaderProps {
   onToggleTaskHistory: () => void;
   onToggleAssetLibrary: () => void;
   onToggleAccountSecurity: () => void;
+  onToggleCredits: () => void;
   currentWorkflowName: string;
+  creditBalance?: number;
   currentUser?: ProxyUser | null;
   deploymentMode?: string;
   onLogout?: () => void;
@@ -25,7 +27,9 @@ export function Header({
   onToggleTaskHistory,
   onToggleAssetLibrary,
   onToggleAccountSecurity,
+  onToggleCredits,
   currentWorkflowName,
+  creditBalance,
   currentUser,
   deploymentMode,
   onLogout,
@@ -121,6 +125,17 @@ export function Header({
         {shouldShowAccountStatus && (
           <div className="template-chip">
             <span className="max-w-[120px] truncate">{displayName}</span>
+            {typeof creditBalance === 'number' && (
+              <button
+                className="inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] text-emerald-300 hover:bg-emerald-500/20"
+                onClick={onToggleCredits}
+                title="查看积分余额和流水"
+                type="button"
+              >
+                <Coins className="h-3 w-3" />
+                {creditBalance} 积分
+              </button>
+            )}
             {userRoleLabel && <span className="rounded bg-black/20 px-1.5 py-0.5 text-[10px] text-gray-500">{userRoleLabel}</span>}
             {modeLabel && <span className="rounded bg-blue-500/10 px-1.5 py-0.5 text-[10px] text-blue-300">{modeLabel}</span>}
             {currentUser && (

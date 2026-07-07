@@ -133,6 +133,7 @@ function taskRelationshipData(task) {
 
 function createTaskQueueService({
   concurrency = 2,
+  creditService = null,
   handlers = {},
   name = 'default',
   pollIntervalMs = 1000,
@@ -147,6 +148,31 @@ function createTaskQueueService({
   let stopped = false;
   const activeRuns = new Set();
   const supportedNodeTypes = Object.keys(handlers);
+
+  function refundTaskCredits(task, reason) {
+    if (!creditService?.refundTask || !task?.id) return;
+    try {
+      creditService.refundTask(task, {
+        description: `Task credits refunded after ${reason}.`,
+        metadata: {
+          nodeType: task.nodeType,
+          providerId: task.providerId,
+          reason,
+        },
+        reason,
+      });
+    } catch (error) {
+      taskRepository.addTaskLog(task.id, {
+        level: 'error',
+        event: 'credit_refund_failed',
+        message: 'Credit refund failed.',
+        data: {
+          error: error?.message || 'Unknown refund error.',
+          reason,
+        },
+      });
+    }
+  }
 
   function schedule() {
     if (stopped) return;
@@ -209,6 +235,7 @@ function createTaskQueueService({
           },
         });
       } else if (latest?.status === 'failed') {
+        refundTaskCredits(latest, 'failed');
         taskRepository.addTaskLog(claimed.id, {
           level: 'error',
           event: 'failed',
@@ -223,6 +250,7 @@ function createTaskQueueService({
           },
         });
       } else if (latest?.status === 'cancelled') {
+        refundTaskCredits(latest, 'cancelled');
         taskRepository.addTaskLog(claimed.id, {
           level: 'warn',
           event: 'cancelled',
@@ -248,6 +276,7 @@ function createTaskQueueService({
         });
       }
       if (latest?.status === 'cancelled') {
+        refundTaskCredits(latest, 'cancelled');
         taskRepository.addTaskLog(task.id, {
           level: 'warn',
           event: 'cancelled',
@@ -276,6 +305,7 @@ function createTaskQueueService({
           ...taskRelationshipData(latest || task),
         },
       });
+      refundTaskCredits(taskRepository.getTask(task.id) || latest || task, 'failed');
     } finally {
       activeCount -= 1;
       schedule();

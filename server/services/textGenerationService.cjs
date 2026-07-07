@@ -30,6 +30,9 @@ function createTextTask(userId, body, status = 'queued', taskRepository = defaul
     providerId: safeBody.providerId || (requestKind === 'claude' ? 'anthropic' : 'openai-compatible'),
     model: inferTextModel(safeBody),
     status,
+    creditCost: safeBody.creditCost || 0,
+    creditKeyScope: safeBody.creditKeyScope || '',
+    creditStatus: safeBody.creditStatus || 'none',
     retryOf: safeBody.retryOf || null,
     input: {
       ...safeBody,

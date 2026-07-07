@@ -11,6 +11,7 @@ const { registerHealthRoutes } = require('./routes/healthRoutes.cjs');
 const { registerTaskRoutes } = require('./routes/taskRoutes.cjs');
 const { createPublicAsset } = require('./services/assetService.cjs');
 const { createCredentialService } = require('./services/credentialService.cjs');
+const { createCreditService } = require('./services/creditService.cjs');
 const { createSecurityHeadersMiddleware } = require('./services/securityHeadersService.cjs');
 const { createSecretService } = require('./services/secretService.cjs');
 const {
@@ -67,6 +68,7 @@ function createWorkerServiceApp({ env = process.env, startWorkers } = {}) {
     deploymentMode: deployment,
     allowDirectCredentials: requestConfig.allowDirectCredentials,
   });
+  const creditService = createCreditService();
   const secretService = createSecretService({
     deploymentMode: deployment,
     env,
@@ -87,6 +89,7 @@ function createWorkerServiceApp({ env = process.env, startWorkers } = {}) {
 
   const textWorker = createTextWorker({
     autoStart: shouldStartWorkers,
+    creditService,
     joinUrl,
     proxyRequest,
     readSecrets: secretService.readSecrets,
@@ -96,6 +99,7 @@ function createWorkerServiceApp({ env = process.env, startWorkers } = {}) {
     textQueueConcurrency: requestConfig.taskQueues.textConcurrency,
   });
   const textTaskRequestService = createTextTaskRequestService({
+    creditService,
     getRequestUserId,
     readSecrets: secretService.readSecrets,
     textGenerationService: textWorker.textGenerationService,
@@ -104,6 +108,7 @@ function createWorkerServiceApp({ env = process.env, startWorkers } = {}) {
   const generationHandlers = registerGenerationRoutes(app, {
     assetStorage,
     autoStartQueue: shouldStartWorkers,
+    creditService,
     generationQueueConcurrency: requestConfig.taskQueues.generationConcurrency,
     getRequestUserId,
     joinUrl,
@@ -117,6 +122,7 @@ function createWorkerServiceApp({ env = process.env, startWorkers } = {}) {
     },
   });
   const taskService = createTaskService({
+    creditService,
     publicAsset,
   });
 

@@ -169,6 +169,10 @@ test('generic proxy is disabled unless explicitly enabled and allowlisted', () =
     enabled: true,
     allowlist,
   }));
+  assert.throws(() => assertGenericProxyAllowed('https://evil.volces.com.attacker.com/api/v3', {
+    enabled: true,
+    allowlist,
+  }), /not allowed/);
   assert.throws(() => assertGenericProxyAllowed('https://example.com', {
     enabled: true,
     allowlist,

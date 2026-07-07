@@ -5,6 +5,7 @@ const { createVideoGenerationService } = require('../services/videoGenerationSer
 function createGenerationWorker({
   assetStorage,
   autoStart = true,
+  creditService = null,
   generationQueueConcurrency = 2,
   joinUrl,
   proxyRequest,
@@ -33,6 +34,7 @@ function createGenerationWorker({
   const generationQueue = createTaskQueueService({
     name: 'generation',
     concurrency: generationQueueConcurrency,
+    creditService,
     pollIntervalMs: taskQueuePollIntervalMs,
     handlers: {
       image: async (task, payload = {}) => {

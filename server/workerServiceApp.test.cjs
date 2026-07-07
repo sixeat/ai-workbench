@@ -12,13 +12,14 @@ process.env.WORKBENCH_DEPLOYMENT_MODE = 'server';
 process.env.WORKBENCH_KEY_SECRET = 'worker-service-test-secret-0123456789';
 process.env.WORKBENCH_REQUIRE_LOGIN = 'true';
 
-const { createUser, db, getTask } = require('./db.cjs');
+const { countTasks, createUser, db, getTask } = require('./db.cjs');
 const {
   createWorkerServiceApp,
   resolveWorkerServiceHost,
   resolveWorkerServicePort,
   workerServiceIdentityRequired,
 } = require('./workerServiceApp.cjs');
+const { creditRepository } = require('./repositories/creditRepository.cjs');
 
 function listen(app) {
   const server = http.createServer(app);
@@ -167,6 +168,11 @@ test('worker-service enqueues generation tasks using gateway user context', asyn
     passwordHash: 'test',
     username: 'worker-image@example.com',
   });
+  creditRepository.adjustAccount({
+    amount: 20,
+    description: 'Test grant.',
+    userId: user.id,
+  });
 
   await withRuntime(serverEnv(), async ({ baseUrl, runtime }) => {
     const response = await fetchJson(`${baseUrl}/api/images`, {
@@ -185,7 +191,40 @@ test('worker-service enqueues generation tasks using gateway user context', asyn
     assert.equal(response.status, 202);
     assert.equal(response.data.status, 'queued');
     assert.equal(response.data.task.userId, user.id);
-    assert.equal(getTask(response.data.taskId).status, 'queued');
+    const task = getTask(response.data.taskId);
+    assert.equal(task.status, 'queued');
+    assert.equal(task.creditCost, 10);
+    assert.equal(task.creditStatus, 'charged');
+    assert.equal(task.creditKeyScope, 'server_key');
+    assert.equal(creditRepository.getAccount(user.id).balance, 10);
     assert.equal(runtime.handlers.generationHandlers.getGenerationQueueStats().scheduled, false);
+  });
+});
+
+test('worker-service rejects server-key image tasks when credits are insufficient', async () => {
+  const user = createUser({
+    email: 'worker-image-no-credit@example.com',
+    name: 'Worker Image No Credit',
+    passwordHash: 'test',
+    username: 'worker-image-no-credit@example.com',
+  });
+
+  await withRuntime(serverEnv(), async ({ baseUrl }) => {
+    const response = await fetchJson(`${baseUrl}/api/images`, {
+      body: JSON.stringify({
+        model: 'gpt-image-test',
+        prompt: 'no credits',
+        providerId: 'openai-compatible',
+      }),
+      headers: {
+        'Content-Type': 'application/json',
+        'x-workbench-user-id': user.id,
+      },
+      method: 'POST',
+    });
+
+    assert.equal(response.status, 402);
+    assert.equal(response.data.error, 'Insufficient credits.');
+    assert.equal(countTasks(user.id), 0);
   });
 });

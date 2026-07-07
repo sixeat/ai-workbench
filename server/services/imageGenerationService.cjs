@@ -27,6 +27,9 @@ function createImageTask(userId, body, status = 'queued', taskRepository = defau
     providerId: body.providerId || 'openai-compatible',
     model: body.model,
     status,
+    creditCost: body.creditCost || 0,
+    creditKeyScope: body.creditKeyScope || '',
+    creditStatus: body.creditStatus || 'none',
     retryOf: body.retryOf || null,
     input: {
       providerId: body.providerId || 'openai-compatible',
@@ -51,6 +54,7 @@ function createImageTask(userId, body, status = 'queued', taskRepository = defau
       enable_sequential: body.enable_sequential,
       thinkingMode: body.thinkingMode,
       thinking_mode: body.thinking_mode,
+      billing: body.billing || null,
       upstreamTaskIds: Array.isArray(body.upstreamTaskIds) ? body.upstreamTaskIds : [],
       hasNegativePrompt: Boolean(body.negative_prompt),
       hasReferenceImage: Boolean(body.reference_image),

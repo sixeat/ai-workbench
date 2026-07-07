@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Activity, ClipboardList, Cloud, Database, FolderOpen, Key, Loader2, RefreshCw, Search, Server, ShieldCheck, SlidersHorizontal, UserPlus, X } from 'lucide-react';
+import { Activity, ClipboardList, Cloud, Coins, Database, FolderOpen, Key, Loader2, RefreshCw, Search, Server, ShieldCheck, SlidersHorizontal, UserPlus, X } from 'lucide-react';
 import {
   proxyAdminHealth,
+  proxyAdminAdjustCredits,
+  proxyAdminListCreditUsers,
+  proxyAdminListCreditTransactions,
   proxyCreateInvitation,
   proxyCreateUser,
   proxyDisableInvitation,
   proxyListInvitations,
   proxyListAuditLogs,
-  proxyListUsers,
   proxyUpdateUserPassword,
   proxyUpdateUserStatus,
   type ProxyAdminHealth,
+  type ProxyAdminCreditUser,
   type ProxyAuditLog,
+  type ProxyCreditTransaction,
   type ProxyInvitation,
   type ProxyUser,
 } from '../../lib/apiProxy';
@@ -33,6 +37,12 @@ import {
   formatAuditActor,
   mergeAuditLogPages,
 } from '../../lib/auditLogDisplay';
+import {
+  creditTransactionTone,
+  formatCreditAmount,
+  formatCreditDate,
+  formatCreditTransactionType,
+} from '../../lib/creditDisplay';
 import type { ApiManagerTab } from './ApiManagerPanel';
 
 interface AdminUsersPanelProps {
@@ -56,6 +66,11 @@ const emptyInviteForm = {
   expiresInDays: 30,
 };
 
+const emptyCreditForm = {
+  amount: '100',
+  reason: '管理员赠送积分',
+};
+
 const emptyListFilters = {
   search: '',
   role: '',
@@ -65,8 +80,9 @@ const emptyListFilters = {
 const USER_PAGE_SIZE = 80;
 const INVITATION_PAGE_SIZE = 80;
 const AUDIT_PAGE_SIZE = 80;
+const CREDIT_PAGE_SIZE = 80;
 
-type AdminTab = 'users' | 'invitations' | 'apiKeys' | 'modelCapabilities' | 'audit' | 'system';
+type AdminTab = 'users' | 'credits' | 'invitations' | 'apiKeys' | 'modelCapabilities' | 'audit' | 'system';
 
 function roleLabel(role: string): string {
   if (role === 'admin') return '管理员';
@@ -93,25 +109,32 @@ function mergeById<T extends { id: string }>(current: T[], next: T[]): T[] {
 }
 
 export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager }: AdminUsersPanelProps) {
-  const [users, setUsers] = useState<ProxyUser[]>([]);
+  const [users, setUsers] = useState<ProxyAdminCreditUser[]>([]);
   const [invitations, setInvitations] = useState<ProxyInvitation[]>([]);
   const [auditLogs, setAuditLogs] = useState<ProxyAuditLog[]>([]);
+  const [creditTransactions, setCreditTransactions] = useState<ProxyCreditTransaction[]>([]);
   const [health, setHealth] = useState<ProxyAdminHealth | null>(null);
   const [activeTab, setActiveTab] = useState<AdminTab>('users');
   const [form, setForm] = useState(emptyForm);
   const [inviteForm, setInviteForm] = useState(emptyInviteForm);
+  const [creditForm, setCreditForm] = useState(emptyCreditForm);
+  const [selectedCreditUserId, setSelectedCreditUserId] = useState('');
   const [newInviteCode, setNewInviteCode] = useState('');
   const [userFilters, setUserFilters] = useState(emptyListFilters);
   const [appliedUserFilters, setAppliedUserFilters] = useState(emptyListFilters);
   const [invitationFilters, setInvitationFilters] = useState(emptyListFilters);
   const [appliedInvitationFilters, setAppliedInvitationFilters] = useState(emptyListFilters);
+  const [creditTypeFilter, setCreditTypeFilter] = useState('');
+  const [creditTaskFilter, setCreditTaskFilter] = useState('');
   const [auditSearch, setAuditSearch] = useState('');
   const [userTotal, setUserTotal] = useState(0);
   const [invitationTotal, setInvitationTotal] = useState(0);
   const [auditTotal, setAuditTotal] = useState(0);
+  const [creditTotal, setCreditTotal] = useState(0);
   const [usersLoading, setUsersLoading] = useState(false);
   const [invitationsLoading, setInvitationsLoading] = useState(false);
   const [auditLoading, setAuditLoading] = useState(false);
+  const [creditLoading, setCreditLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState('');
@@ -122,7 +145,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
     setUsersLoading(true);
     setError('');
     try {
-      const data = await proxyListUsers({
+      const data = await proxyAdminListCreditUsers({
         limit: USER_PAGE_SIZE,
         offset: 0,
         ...appliedUserFilters,
@@ -140,7 +163,7 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
   const loadMoreUsers = useCallback(async () => {
     setUsersLoading(true);
     try {
-      const data = await proxyListUsers({
+      const data = await proxyAdminListCreditUsers({
         limit: USER_PAGE_SIZE,
         offset: users.length,
         ...appliedUserFilters,
@@ -229,6 +252,44 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
     }
   }, [auditLogs.length]);
 
+  const loadCreditTransactions = useCallback(async () => {
+    setCreditLoading(true);
+    try {
+      const data = await proxyAdminListCreditTransactions({
+        limit: CREDIT_PAGE_SIZE,
+        offset: 0,
+        taskId: creditTaskFilter,
+        type: creditTypeFilter,
+        userId: selectedCreditUserId,
+      });
+      setCreditTransactions(data.transactions);
+      setCreditTotal(data.total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载积分流水失败');
+    } finally {
+      setCreditLoading(false);
+    }
+  }, [creditTaskFilter, creditTypeFilter, selectedCreditUserId]);
+
+  const loadMoreCreditTransactions = useCallback(async () => {
+    setCreditLoading(true);
+    try {
+      const data = await proxyAdminListCreditTransactions({
+        limit: CREDIT_PAGE_SIZE,
+        offset: creditTransactions.length,
+        taskId: creditTaskFilter,
+        type: creditTypeFilter,
+        userId: selectedCreditUserId,
+      });
+      setCreditTransactions((current) => mergeById(current, data.transactions));
+      setCreditTotal(data.total);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '加载积分流水失败');
+    } finally {
+      setCreditLoading(false);
+    }
+  }, [creditTaskFilter, creditTransactions.length, creditTypeFilter, selectedCreditUserId]);
+
   const reloadAll = useCallback(async () => {
     await Promise.all([loadUsers(), loadInvitations(), loadAuditLogs(), loadHealth()]);
   }, [loadAuditLogs, loadHealth, loadInvitations, loadUsers]);
@@ -245,11 +306,17 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
   const usersHasMore = users.length < userTotal;
   const invitationsHasMore = invitations.length < invitationTotal;
   const auditHasMore = auditLogs.length < auditTotal;
+  const creditHasMore = creditTransactions.length < creditTotal;
+  const selectedCreditUser = users.find((user) => user.id === selectedCreditUserId) || null;
   const auditSummary = formatAuditLogPageSummary(filteredAuditLogs.length, auditLogs.length, auditTotal, auditSearch);
 
   useEffect(() => {
     if (isOpen) reloadAll();
   }, [isOpen, reloadAll]);
+
+  useEffect(() => {
+    if (isOpen) void loadCreditTransactions();
+  }, [isOpen, loadCreditTransactions]);
 
   useEffect(() => {
     if (!notice) return;
@@ -326,6 +393,44 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
     }
   };
 
+  const handleSelectCreditUser = (user: ProxyAdminCreditUser) => {
+    setSelectedCreditUserId(user.id);
+    setCreditForm((current) => ({
+      ...current,
+      reason: Number(current.amount) < 0 ? '管理员扣减积分' : '管理员赠送积分',
+    }));
+    setActiveTab('credits');
+  };
+
+  const handleAdjustCredits = async () => {
+    if (!selectedCreditUser) {
+      setError('请先选择要调整积分的用户。');
+      return;
+    }
+
+    const amount = Number(creditForm.amount);
+    if (!Number.isFinite(amount) || !Number.isInteger(amount) || amount === 0) {
+      setError('请输入非 0 整数积分。');
+      return;
+    }
+
+    setError('');
+    setSaving(true);
+    try {
+      await proxyAdminAdjustCredits({
+        amount,
+        reason: creditForm.reason,
+        userId: selectedCreditUser.id,
+      });
+      setNotice('积分已调整');
+      await Promise.all([loadUsers(), loadCreditTransactions()]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '积分调整失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <FloatingWindow contentClassName="h-[calc(100vh-32px)] w-[calc(100vw-112px)] flex-col">
         <div className="flex items-center justify-between border-b border-panel-border px-4 py-3">
@@ -354,6 +459,9 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
           <aside className="space-y-2 overflow-auto border-r border-panel-border p-3">
             <TabButton active={activeTab === 'users'} icon={<UserPlus className="h-3.5 w-3.5" />} onClick={() => setActiveTab('users')}>
               用户
+            </TabButton>
+            <TabButton active={activeTab === 'credits'} icon={<Coins className="h-3.5 w-3.5" />} onClick={() => setActiveTab('credits')}>
+              积分
             </TabButton>
             <TabButton active={activeTab === 'invitations'} icon={<ShieldCheck className="h-3.5 w-3.5" />} onClick={() => setActiveTab('invitations')}>
               邀请
@@ -460,9 +568,13 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
                               <span className={cn('rounded px-1.5 py-0.5', user.isEnabled === false ? 'bg-red-500/15 text-red-300' : 'bg-emerald-500/15 text-emerald-300')}>
                                 {user.isEnabled === false ? '已禁用' : '已启用'}
                               </span>
+                              <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-300">
+                                {user.creditAccount?.balance ?? 0} 积分
+                              </span>
                             </div>
                           </div>
                           <div className="flex items-center gap-1">
+                            <SmallButton onClick={() => handleSelectCreditUser(user)}>积分</SmallButton>
                             <SmallButton onClick={() => handleResetPassword(user)}>改密码</SmallButton>
                             <SmallButton onClick={() => handleToggleStatus(user)} danger={user.isEnabled !== false}>
                               {user.isEnabled === false ? '启用' : '禁用'}
@@ -486,6 +598,149 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, onOpenApiManager
                   )}
                 </section>
               </div>
+            )}
+
+            {activeTab === 'credits' && (
+              <section className="space-y-4">
+                <div className="grid gap-4 xl:grid-cols-[360px_1fr]">
+                  <div className="space-y-4">
+                    <section className="space-y-3 rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
+                      <div className="flex items-center gap-2 text-xs font-medium text-gray-300">
+                        <Coins className="h-3.5 w-3.5 text-emerald-300" />
+                        积分调整
+                      </div>
+                      <label className="block space-y-1">
+                        <span className="text-[10px] text-gray-500">目标用户</span>
+                        <select
+                          value={selectedCreditUserId}
+                          onChange={(event) => setSelectedCreditUserId(event.target.value)}
+                          className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                        >
+                          <option value="">选择用户</option>
+                          {users.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.email || user.username || user.id}（{user.creditAccount?.balance ?? 0} 积分）
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      {selectedCreditUser && (
+                        <div className="grid grid-cols-3 gap-2 text-[10px]">
+                          <CreditMetric label="余额" value={selectedCreditUser.creditAccount?.balance ?? 0} />
+                          <CreditMetric label="累计获得" value={selectedCreditUser.creditAccount?.totalGranted ?? 0} />
+                          <CreditMetric label="累计消耗" value={selectedCreditUser.creditAccount?.totalUsed ?? 0} />
+                        </div>
+                      )}
+                      <Input
+                        label="积分变动"
+                        type="number"
+                        value={creditForm.amount}
+                        onChange={(value) => {
+                          setCreditForm((current) => ({
+                            ...current,
+                            amount: value,
+                            reason: Number(value) < 0 ? '管理员扣减积分' : '管理员赠送积分',
+                          }));
+                        }}
+                        placeholder="正数增加，负数扣减"
+                      />
+                      <Input
+                        label="调整原因"
+                        value={creditForm.reason}
+                        onChange={(value) => setCreditForm((current) => ({ ...current, reason: value }))}
+                        placeholder="例如：测试赠送、售后补偿、风控修正"
+                      />
+                      <PrimaryButton onClick={() => void handleAdjustCredits()} disabled={saving || !selectedCreditUserId}>
+                        {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Coins className="h-3.5 w-3.5" />}
+                        提交积分调整
+                      </PrimaryButton>
+                      <p className="text-[10px] leading-4 text-gray-500">
+                        调整会写入积分流水和审计日志。普通用户不能调用这个接口。
+                      </p>
+                    </section>
+
+                    <section className="rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
+                      <div className="mb-2 text-xs font-medium text-gray-300">计费策略</div>
+                      <div className="space-y-2 text-[10px] text-gray-500">
+                        <div className="rounded-md bg-panel-bg/70 px-2 py-1.5">服务器 Key：文本 1 分/次，图片 10 分/张，视频 20 分/秒。</div>
+                        <div className="rounded-md bg-panel-bg/70 px-2 py-1.5">用户自己的 Key：当前版本不扣平台积分。</div>
+                      </div>
+                    </section>
+                  </div>
+
+                  <section>
+                    <div className="mb-2 flex items-center justify-between">
+                      <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">积分流水</h3>
+                      <span className="text-[10px] text-gray-500">
+                        已加载 {creditTransactions.length}/{creditTotal || creditTransactions.length} 条
+                      </span>
+                    </div>
+                    <div className="mb-3 grid gap-2 rounded-lg border border-panel-border bg-canvas-bg/40 p-2 md:grid-cols-[1fr_140px_1fr_auto]">
+                      <select
+                        value={selectedCreditUserId}
+                        onChange={(event) => setSelectedCreditUserId(event.target.value)}
+                        className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                      >
+                        <option value="">全部用户</option>
+                        {users.map((user) => (
+                          <option key={user.id} value={user.id}>
+                            {user.email || user.username || user.id}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={creditTypeFilter}
+                        onChange={(event) => setCreditTypeFilter(event.target.value)}
+                        className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+                      >
+                        <option value="">全部类型</option>
+                        <option value="debit">扣费</option>
+                        <option value="refund">退款</option>
+                        <option value="admin_adjustment">管理员调整</option>
+                        <option value="grant">充值</option>
+                        <option value="free_usage">用户 Key 免费</option>
+                      </select>
+                      <input
+                        value={creditTaskFilter}
+                        onChange={(event) => setCreditTaskFilter(event.target.value)}
+                        placeholder="按任务 ID 筛选"
+                        className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
+                      />
+                      <button
+                        onClick={() => void loadCreditTransactions()}
+                        disabled={creditLoading}
+                        className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <RefreshCw className={cn('h-3.5 w-3.5', creditLoading && 'animate-spin')} />
+                        刷新
+                      </button>
+                    </div>
+                    <div className="overflow-hidden rounded-lg border border-panel-border">
+                      {creditLoading && creditTransactions.length === 0 ? (
+                        <EmptyText>正在加载积分流水...</EmptyText>
+                      ) : creditTransactions.length === 0 ? (
+                        <EmptyText>暂无积分流水</EmptyText>
+                      ) : (
+                        creditTransactions.map((transaction) => (
+                          <CreditTransactionItem key={transaction.id} transaction={transaction} />
+                        ))
+                      )}
+                    </div>
+                    {creditHasMore && (
+                      <div className="mt-3 flex justify-center">
+                        <button
+                          onClick={() => void loadMoreCreditTransactions()}
+                          disabled={creditLoading}
+                          className="inline-flex items-center gap-2 rounded-md border border-panel-border px-3 py-1.5 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {creditLoading && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                          加载更多流水
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                </div>
+              </section>
             )}
 
             {activeTab === 'invitations' && (
@@ -844,6 +1099,55 @@ function StatCard({ icon, label, value }: { icon: React.ReactNode; label: string
         {label}
       </div>
       <div className="truncate text-lg font-semibold text-white">{value}</div>
+    </div>
+  );
+}
+
+function CreditMetric({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-panel-bg/70 px-2 py-1.5">
+      <div className="text-gray-500">{label}</div>
+      <div className="mt-0.5 text-xs font-medium text-gray-100">{value}</div>
+    </div>
+  );
+}
+
+function CreditTransactionItem({ transaction }: { transaction: ProxyCreditTransaction }) {
+  const tone = creditTransactionTone(transaction);
+  return (
+    <div className="grid grid-cols-[1fr_auto] gap-3 border-b border-panel-border bg-canvas-bg/50 px-3 py-2 last:border-b-0">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs font-medium text-white">{formatCreditTransactionType(transaction.type)}</span>
+          {transaction.taskId && (
+            <span className="max-w-[180px] truncate rounded bg-panel-bg px-1.5 py-0.5 text-[10px] text-gray-500" title={transaction.taskId}>
+              任务 {transaction.taskId}
+            </span>
+          )}
+          {transaction.userId && (
+            <span className="max-w-[180px] truncate rounded bg-panel-bg px-1.5 py-0.5 text-[10px] text-gray-500" title={transaction.userId}>
+              用户 {transaction.userId}
+            </span>
+          )}
+        </div>
+        <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+          <span>{formatCreditDate(transaction.createdAt)}</span>
+          {transaction.description && <span className="truncate">{transaction.description}</span>}
+        </div>
+      </div>
+      <div className="shrink-0 text-right">
+        <div
+          className={cn(
+            'text-xs font-semibold',
+            tone === 'success' && 'text-emerald-300',
+            tone === 'danger' && 'text-red-300',
+            tone === 'neutral' && 'text-gray-300'
+          )}
+        >
+          {formatCreditAmount(transaction.amount)}
+        </div>
+        <div className="mt-1 text-[10px] text-gray-500">余额 {transaction.balanceAfter}</div>
+      </div>
     </div>
   );
 }

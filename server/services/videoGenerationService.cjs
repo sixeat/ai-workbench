@@ -27,6 +27,9 @@ function createVideoTask(userId, body, status = 'queued', taskRepository = defau
     providerId: body.providerId || 'seedance',
     model: body.model,
     status,
+    creditCost: body.creditCost || 0,
+    creditKeyScope: body.creditKeyScope || '',
+    creditStatus: body.creditStatus || 'none',
     retryOf: body.retryOf || null,
     input: {
       providerId: body.providerId || 'seedance',
@@ -57,6 +60,7 @@ function createVideoTask(userId, body, status = 'queued', taskRepository = defau
       seed: body.seed,
       negativePrompt: body.negativePrompt,
       negative_prompt: body.negative_prompt,
+      billing: body.billing || null,
       upstreamTaskIds: Array.isArray(body.upstreamTaskIds) ? body.upstreamTaskIds : [],
       imageCount: Array.isArray(body.images) ? body.images.length : 0,
       hasReferenceVideo: Boolean(body.referenceVideoUrl),

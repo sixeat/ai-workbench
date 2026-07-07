@@ -31,6 +31,12 @@ test('parseMegabyteLimit converts positive megabytes to bytes', () => {
 test('resolveSessionCookieOptions preserves split-domain cookie settings', () => {
   assert.deepEqual(resolveSessionCookieOptions({}), {
     sameSite: 'Lax',
+    secure: true,
+  });
+
+  assert.deepEqual(resolveSessionCookieOptions({}, 'local'), {
+    sameSite: 'Lax',
+    secure: false,
   });
 
   assert.deepEqual(resolveSessionCookieOptions({

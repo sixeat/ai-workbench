@@ -31,6 +31,7 @@ function createGenericProxyService({
       body: proxyBody,
       headers,
       method,
+      stripSensitiveHeaders: true,
     });
 
     return {

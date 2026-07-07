@@ -3,6 +3,7 @@ const { createTextGenerationService } = require('../services/textGenerationServi
 
 function createTextWorker({
   autoStart = true,
+  creditService = null,
   joinUrl,
   proxyRequest,
   readSecrets,
@@ -20,6 +21,7 @@ function createTextWorker({
   const textQueue = createTaskQueueService({
     name: 'text',
     concurrency: textQueueConcurrency,
+    creditService,
     pollIntervalMs: taskQueuePollIntervalMs,
     handlers: {
       text: async (task, payload = {}) => {

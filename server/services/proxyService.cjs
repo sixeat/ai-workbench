@@ -1,5 +1,25 @@
 const { assertPublicHttpUrl, fetchWithTimeout } = require('./networkGuard.cjs');
 
+const STRIPPED_PROXY_HEADERS = new Set([
+  'authorization',
+  'cookie',
+  'host',
+  'connection',
+  'origin',
+  'proxy-authorization',
+  'referer',
+  'set-cookie',
+  'x-api-key',
+  'x-csrf-token',
+  'x-forwarded-for',
+  'x-forwarded-host',
+  'x-forwarded-proto',
+  'x-real-ip',
+  'x-user-id',
+  'x-workbench-admin-token',
+  'x-workbench-token',
+]);
+
 function joinUrl(baseUrl, endpoint) {
   const base = String(baseUrl || '').trim().replace(/\/+$/, '');
   const pathPart = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -20,11 +40,9 @@ async function proxyRequest(targetUrl, options = {}) {
     await assertPublicHttpUrl(targetUrl);
   }
 
-  const headers = { ...(options.headers || {}) };
-  delete headers.origin;
-  delete headers.referer;
-  delete headers.host;
-  delete headers.connection;
+  const headers = options.stripSensitiveHeaders
+    ? stripProxyRequestHeaders(options.headers)
+    : stripHopByHopHeaders(options.headers);
 
   const fetchOptions = {
     method: options.method || 'GET',
@@ -58,7 +76,28 @@ async function proxyRequest(targetUrl, options = {}) {
   };
 }
 
+function stripProxyRequestHeaders(headers = {}) {
+  const nextHeaders = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const normalized = String(key).trim().toLowerCase();
+    if (!normalized || STRIPPED_PROXY_HEADERS.has(normalized)) continue;
+    nextHeaders[key] = value;
+  }
+  return nextHeaders;
+}
+
+function stripHopByHopHeaders(headers = {}) {
+  const nextHeaders = { ...(headers || {}) };
+  delete nextHeaders.origin;
+  delete nextHeaders.referer;
+  delete nextHeaders.host;
+  delete nextHeaders.connection;
+  return nextHeaders;
+}
+
 module.exports = {
   joinUrl,
   proxyRequest,
+  stripHopByHopHeaders,
+  stripProxyRequestHeaders,
 };

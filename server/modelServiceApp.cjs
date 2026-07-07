@@ -11,6 +11,7 @@ const { registerModelProxyRoutes } = require('./routes/modelProxyRoutes.cjs');
 const { registerProviderRoutes } = require('./routes/providerRoutes.cjs');
 const { createApiKeyTestService } = require('./services/apiKeyTestService.cjs');
 const { createCredentialService } = require('./services/credentialService.cjs');
+const { createCreditService } = require('./services/creditService.cjs');
 const {
   createInternalServiceIdentityMiddleware,
   pathMatchesProtectedPrefix,
@@ -75,6 +76,7 @@ function createModelServiceApp({ env = process.env, startWorkers } = {}) {
     deploymentMode: deployment,
     keyEncryptionSecret,
   });
+  const creditService = createCreditService();
   const secretService = createSecretService({
     deploymentMode: deployment,
     env,
@@ -114,6 +116,7 @@ function createModelServiceApp({ env = process.env, startWorkers } = {}) {
   const modelProxyHandlers = registerModelProxyRoutes(app, {
     allowSyncGeneration: enableSyncGeneration,
     autoStartQueue: shouldStartTextQueue,
+    creditService,
     enableGenericProxy,
     getRequestUserId,
     joinUrl,

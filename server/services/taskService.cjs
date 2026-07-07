@@ -22,7 +22,7 @@ function cancellationLogData(task) {
   };
 }
 
-function createTaskService({ publicAsset, taskRepository = defaultTaskRepository }) {
+function createTaskService({ creditService = null, publicAsset, taskRepository = defaultTaskRepository }) {
   function publicTask(task, options = {}) {
     if (!task) return null;
     const result = {
@@ -82,12 +82,26 @@ function createTaskService({ publicAsset, taskRepository = defaultTaskRepository
           : 'Queued task was cancelled before execution.',
         data: cancellationLogData(task),
       });
-      return publicTask(taskRepository.updateTask(task.id, {
+      const updatedTask = taskRepository.updateTask(task.id, {
         status: 'cancelled',
         error: task.status === 'running'
           ? { message: 'Cancellation requested while task was running.' }
           : null,
-      }), { includeLogs: true });
+      });
+      let nextTask = updatedTask;
+      if (creditService?.refundTask) {
+        creditService.refundTask(updatedTask, {
+          description: 'Task credits refunded after cancellation.',
+          metadata: {
+            nodeType: updatedTask.nodeType,
+            previousStatus: task.status,
+            providerId: updatedTask.providerId,
+          },
+          reason: 'cancelled',
+        });
+        nextTask = taskRepository.getTask(updatedTask.id) || updatedTask;
+      }
+      return publicTask(nextTask, { includeLogs: true });
     }
     return publicTask(task, { includeLogs: true });
   }

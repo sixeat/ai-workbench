@@ -13,6 +13,7 @@ function registerGenerationRoutes(app, context) {
     resolveApiCredentials,
     allowSyncGeneration = false,
     autoStartQueue = true,
+    creditService,
     generationQueueConcurrency = 2,
     taskQueuePollIntervalMs = 1000,
     uploadLimits = {},
@@ -20,6 +21,7 @@ function registerGenerationRoutes(app, context) {
   const generationWorker = createGenerationWorker({
     assetStorage,
     autoStart: autoStartQueue,
+    creditService,
     generationQueueConcurrency,
     joinUrl,
     proxyRequest,
@@ -31,6 +33,7 @@ function registerGenerationRoutes(app, context) {
   });
   const { imageGenerationService, videoGenerationService } = generationWorker;
   const generationTaskRequestService = createGenerationTaskRequestService({
+    creditService,
     generationWorker,
     getRequestUserId,
     imageGenerationService,

@@ -6,6 +6,7 @@ const {
   buildContentSecurityPolicy,
   configuredCspSource,
   createSecurityHeadersMiddleware,
+  hstsHeaderValue,
 } = require('./services/securityHeadersService.cjs');
 
 function createMockRes() {
@@ -53,13 +54,29 @@ test('buildContentSecurityPolicy supports explicit media and connect overrides',
 
 test('applySecurityHeaders writes all baseline browser protection headers', () => {
   const res = createMockRes();
-  applySecurityHeaders(res, { env: {} });
+  applySecurityHeaders(res, { env: { WORKBENCH_DEPLOYMENT_MODE: 'server' } });
 
   assert.equal(res.headers['x-content-type-options'], 'nosniff');
   assert.equal(res.headers['referrer-policy'], 'same-origin');
   assert.equal(res.headers['x-frame-options'], 'DENY');
   assert.equal(res.headers['permissions-policy'], 'camera=(), microphone=(), geolocation=()');
   assert.match(res.headers['content-security-policy'], /default-src 'self'/);
+  assert.match(res.headers['strict-transport-security'], /max-age=15552000/);
+  assert.match(res.headers['strict-transport-security'], /includeSubDomains/);
+});
+
+test('hsts header is server-mode only and configurable', () => {
+  assert.equal(hstsHeaderValue({ WORKBENCH_DEPLOYMENT_MODE: 'local' }), '');
+  assert.equal(hstsHeaderValue({ WORKBENCH_DEPLOYMENT_MODE: 'server', WORKBENCH_ENABLE_HSTS: 'false' }), '');
+  assert.equal(
+    hstsHeaderValue({
+      WORKBENCH_DEPLOYMENT_MODE: 'server',
+      WORKBENCH_HSTS_INCLUDE_SUBDOMAINS: 'false',
+      WORKBENCH_HSTS_MAX_AGE: '31536000',
+      WORKBENCH_HSTS_PRELOAD: 'true',
+    }),
+    'max-age=31536000; preload'
+  );
 });
 
 test('security headers middleware applies headers then calls next', () => {

@@ -153,11 +153,12 @@ function assertGenericProxyAllowed(targetUrl, options = {}) {
 
   const hostname = parsed.hostname.toLowerCase();
   const origin = parsed.origin.toLowerCase();
-  const allowed = allowlist.some((entry) =>
-    entry === hostname ||
-    entry === origin ||
-    (entry.startsWith('*.') && hostname.endsWith(entry.slice(1)))
-  );
+  const allowed = allowlist.some((entry) => {
+    if (entry === hostname || entry === origin) return true;
+    if (!entry.startsWith('*.')) return false;
+    const suffix = entry.slice(2);
+    return hostname.endsWith(`.${suffix}`) && hostname !== suffix;
+  });
 
   if (!allowed) {
     throw Object.assign(new Error('Proxy URL host is not allowed.'), { status: 403 });

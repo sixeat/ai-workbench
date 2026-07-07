@@ -13,6 +13,7 @@ process.env.WORKBENCH_KEY_SECRET = 'model-service-test-secret-0123456789';
 process.env.WORKBENCH_REQUIRE_LOGIN = 'true';
 
 const {
+  countTasks,
   createUser,
   db,
   getApiKey,
@@ -25,6 +26,7 @@ const {
   resolveModelServiceHost,
   resolveModelServicePort,
 } = require('./modelServiceApp.cjs');
+const { creditRepository } = require('./repositories/creditRepository.cjs');
 
 function listen(app) {
   const server = http.createServer(app);
@@ -90,6 +92,31 @@ function internalHeaders(user, extra = {}) {
 test.after(() => {
   db.close();
   fs.rmSync(tempDir, { recursive: true, force: true });
+});
+
+test('model-service rejects server-key text tasks when credits are insufficient', async () => {
+  const user = createUser({
+    email: 'model-chat-no-credit@example.com',
+    name: 'Model Chat No Credit',
+    passwordHash: 'test',
+    username: 'model-chat-no-credit@example.com',
+  });
+
+  await withRuntime(serverEnv(), async ({ baseUrl }) => {
+    const response = await fetchJson(`${baseUrl}/api/chat`, {
+      body: JSON.stringify({
+        model: 'gpt-test',
+        messages: [{ role: 'user', content: 'hello without credits' }],
+        providerId: 'openai-compatible',
+      }),
+      headers: internalHeaders(user),
+      method: 'POST',
+    });
+
+    assert.equal(response.status, 402);
+    assert.equal(response.data.error, 'Insufficient credits.');
+    assert.equal(countTasks(user.id), 0);
+  });
 });
 
 test('model-service defaults to an internal host and dedicated port', () => {
@@ -267,12 +294,17 @@ test('model-service exposes provider templates and model capability presets to a
   });
 });
 
-test('model-service chat route enqueues text tasks without consuming them by default', async () => {
+test('model-service chat route charges server-key credits before enqueueing text tasks', async () => {
   const user = createUser({
     email: 'model-chat@example.com',
     name: 'Model Chat',
     passwordHash: 'test',
     username: 'model-chat@example.com',
+  });
+  creditRepository.adjustAccount({
+    amount: 5,
+    description: 'Test grant.',
+    userId: user.id,
   });
 
   await withRuntime(serverEnv(), async ({ baseUrl, runtime }) => {
@@ -289,7 +321,12 @@ test('model-service chat route enqueues text tasks without consuming them by def
     assert.equal(response.status, 202);
     assert.equal(response.data.status, 'queued');
     assert.equal(response.data.task.userId, user.id);
-    assert.equal(getTask(response.data.taskId).status, 'queued');
+    const task = getTask(response.data.taskId);
+    assert.equal(task.status, 'queued');
+    assert.equal(task.creditCost, 1);
+    assert.equal(task.creditStatus, 'charged');
+    assert.equal(task.creditKeyScope, 'server_key');
+    assert.equal(creditRepository.getAccount(user.id).balance, 4);
     assert.equal(runtime.handlers.modelProxyHandlers.getTextQueueStats().scheduled, false);
   });
 });

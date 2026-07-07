@@ -76,5 +76,6 @@ test('generic proxy service forwards allowed request options', async () => {
     body: { prompt: 'hello' },
     headers: { 'x-demo': '1' },
     method: 'POST',
+    stripSensitiveHeaders: true,
   });
 });

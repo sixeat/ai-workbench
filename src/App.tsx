@@ -10,6 +10,7 @@ import { NodeListPanel } from './components/panels/NodeListPanel';
 import { PropertiesPanel } from './components/panels/PropertiesPanel';
 import {
   proxyAuthMe,
+  proxyGetMyCredits,
   proxyLogin,
   proxyLogout,
   proxyRequestPasswordReset,
@@ -17,6 +18,7 @@ import {
   proxyVerifyPasswordReset,
   proxyVerifyRegistration,
   type ProxyAuthMe,
+  type ProxyCreditAccount,
   type ProxyRegistrationPolicy,
 } from './lib/apiProxy';
 import { preserveLoginFormSnapshot, resolveLoginSubmission } from './lib/authFormState';
@@ -38,6 +40,9 @@ const ApiManagerPanel = lazy(() =>
 );
 const AssetLibraryPanel = lazy(() =>
   import('./components/panels/AssetLibraryPanel').then((module) => ({ default: module.AssetLibraryPanel }))
+);
+const CreditAccountPanel = lazy(() =>
+  import('./components/panels/CreditAccountPanel').then((module) => ({ default: module.CreditAccountPanel }))
 );
 const ExecutionLogsPanel = lazy(() =>
   import('./components/panels/ExecutionLogsPanel').then((module) => ({ default: module.ExecutionLogsPanel }))
@@ -585,6 +590,7 @@ function App() {
   const [authInfo, setAuthInfo] = useState<ProxyAuthMe | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState('');
+  const [creditAccount, setCreditAccount] = useState<ProxyCreditAccount | null>(null);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [isApiManagerOpen, setIsApiManagerOpen] = useState(false);
@@ -594,11 +600,23 @@ function App() {
   const [isWorkflowManagerOpen, setIsWorkflowManagerOpen] = useState(false);
   const [isTaskHistoryOpen, setIsTaskHistoryOpen] = useState(false);
   const [isAssetLibraryOpen, setIsAssetLibraryOpen] = useState(false);
+  const [isCreditAccountOpen, setIsCreditAccountOpen] = useState(false);
   const [isAdminUsersOpen, setIsAdminUsersOpen] = useState(false);
   const [isAccountSecurityOpen, setIsAccountSecurityOpen] = useState(false);
   const [currentWorkflowId, setCurrentWorkflowId] = useState<string | undefined>();
   const [currentWorkflowName, setCurrentWorkflowName] = useState('未命名工作流');
   const { nodes, edges, clearCanvas, setEdges, setNodes } = useCanvasStore();
+
+  const refreshCredits = useCallback(async () => {
+    try {
+      const result = await proxyGetMyCredits();
+      setCreditAccount(result.account);
+      return result.account;
+    } catch {
+      setCreditAccount(null);
+      return null;
+    }
+  }, []);
 
   const refreshAuth = useCallback(async (showLoading = true) => {
     if (showLoading) setAuthLoading(true);
@@ -607,6 +625,11 @@ function App() {
       const data = await proxyAuthMe();
       setAuthInfo(data);
       setWorkflowStorageMode(data.deploymentMode);
+      if (data.authenticated || !data.requireLogin) {
+        void refreshCredits();
+      } else {
+        setCreditAccount(null);
+      }
       return data;
     } catch (err) {
       setAuthError(err instanceof Error ? err.message : '后端服务没有响应。');
@@ -614,16 +637,25 @@ function App() {
     } finally {
       if (showLoading) setAuthLoading(false);
     }
-  }, []);
+  }, [refreshCredits]);
 
   useEffect(() => {
     refreshAuth();
   }, [refreshAuth]);
 
+  useEffect(() => {
+    if (!authInfo || (!authInfo.authenticated && authInfo.requireLogin)) return;
+    const timer = window.setInterval(() => {
+      void refreshCredits();
+    }, 15_000);
+    return () => window.clearInterval(timer);
+  }, [authInfo, refreshCredits]);
+
   const handleLogout = async () => {
     try {
       await proxyLogout();
     } finally {
+      setCreditAccount(null);
       await refreshAuth();
     }
   };
@@ -700,8 +732,10 @@ function App() {
           onToggleTaskHistory={() => setIsTaskHistoryOpen(true)}
           onToggleAssetLibrary={() => setIsAssetLibraryOpen(true)}
           onToggleAccountSecurity={() => setIsAccountSecurityOpen(true)}
+          onToggleCredits={() => setIsCreditAccountOpen(true)}
           currentWorkflowName={currentWorkflowName}
           currentUser={authInfo?.user}
+          creditBalance={creditAccount?.balance}
           deploymentMode={authInfo?.deploymentMode}
           onLogout={authInfo?.authenticated ? handleLogout : undefined}
         />
@@ -750,6 +784,14 @@ function App() {
         )}
         {isTaskHistoryOpen && <TaskHistoryPanel isOpen={isTaskHistoryOpen} onClose={() => setIsTaskHistoryOpen(false)} />}
         {isAssetLibraryOpen && <AssetLibraryPanel isOpen={isAssetLibraryOpen} onClose={() => setIsAssetLibraryOpen(false)} />}
+        {isCreditAccountOpen && (
+          <CreditAccountPanel
+            isOpen={isCreditAccountOpen}
+            currentUser={authInfo?.user}
+            onAccountLoaded={setCreditAccount}
+            onClose={() => setIsCreditAccountOpen(false)}
+          />
+        )}
         {isApiManagerOpen && <ApiManagerPanel isOpen={isApiManagerOpen} onClose={() => setIsApiManagerOpen(false)} initialTab={apiManagerInitialTab} />}
         {isAccountSecurityOpen && (
           <AccountSecurityPanel

@@ -40,6 +40,7 @@ function textRetryBody(task) {
 }
 
 function createTextTaskRequestService({
+  creditService,
   getRequestUserId = (req) => req.authUser?.id || 'local-user',
   readSecrets,
   taskRepository = defaultTaskRepository,
@@ -49,8 +50,20 @@ function createTextTaskRequestService({
   function enqueueTextTask(req, requestKind) {
     const userId = getRequestUserId(req);
     const body = textRequestBody(req.body || {}, requestKind);
-    const task = textGenerationService.createTextTask(userId, body, 'queued');
-    textWorker.queueTextTask(task, { body });
+    let queueBody = body;
+    const task = creditService
+      ? creditService.createBillableTask({
+        body,
+        createTask: (taskBody) => {
+          queueBody = taskBody;
+          return textGenerationService.createTextTask(userId, taskBody, 'queued');
+        },
+        nodeType: 'text',
+        requestMeta: { requestKind },
+        userId,
+      }).task
+      : textGenerationService.createTextTask(userId, body, 'queued');
+    textWorker.queueTextTask(task, { body: queueBody });
     return {
       data: {
         status: task.status,
@@ -72,7 +85,19 @@ function createTextTaskRequestService({
 
   async function retryTextTask({ userId, task }) {
     const body = textRetryBody(task);
-    const nextTask = textGenerationService.createTextTask(userId, body, 'queued');
+    let queueBody = body;
+    const nextTask = creditService
+      ? creditService.createBillableTask({
+        body,
+        createTask: (taskBody) => {
+          queueBody = taskBody;
+          return textGenerationService.createTextTask(userId, taskBody, 'queued');
+        },
+        nodeType: 'text',
+        requestMeta: { retryOf: task.id },
+        userId,
+      }).task
+      : textGenerationService.createTextTask(userId, body, 'queued');
     const logData = taskRetryLogData(task, nextTask, 'text');
 
     taskRepository.addTaskLog(task.id, {
@@ -88,7 +113,7 @@ function createTextTaskRequestService({
       event: 'created_from_retry',
       message: 'This text task was created by retrying a failed task.',
     });
-    textWorker.queueTextTask(nextTask, { body });
+    textWorker.queueTextTask(nextTask, { body: queueBody });
 
     return {
       data: {

@@ -22,12 +22,14 @@ function registerModelProxyRoutes(app, context) {
     resolveDirectCredentials,
     allowSyncGeneration = false,
     autoStartQueue = true,
+    creditService,
     taskQueuePollIntervalMs = 1000,
     textQueueConcurrency = 2,
     modelCapabilityRepository,
   } = context;
   const textWorker = createTextWorker({
     autoStart: autoStartQueue,
+    creditService,
     joinUrl,
     proxyRequest,
     readSecrets,
@@ -55,6 +57,7 @@ function registerModelProxyRoutes(app, context) {
     proxyRequest,
   });
   const textTaskRequestService = createTextTaskRequestService({
+    creditService,
     getRequestUserId,
     readSecrets,
     textGenerationService,

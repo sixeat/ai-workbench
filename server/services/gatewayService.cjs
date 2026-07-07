@@ -11,6 +11,7 @@ const { parseBoolean } = require('../security.cjs');
 
 const GATEWAY_ROUTE_TABLE = Object.freeze([
   { prefix: '/api/auth', service: 'auth-service', module: 'auth', upstreamKey: 'auth' },
+  { prefix: '/api/credits', service: 'auth-service', module: 'credits', upstreamKey: 'auth' },
   { prefix: '/api/tasks', service: 'worker-service', module: 'tasks', upstreamKey: 'worker' },
   { prefix: '/api/assets', service: 'asset-service', module: 'assets', upstreamKey: 'asset' },
   { prefix: '/api/asset-collections', service: 'asset-service', module: 'assets', upstreamKey: 'asset' },
@@ -27,6 +28,7 @@ const GATEWAY_ROUTE_TABLE = Object.freeze([
   { prefix: '/api/chat', service: 'model-service', module: 'generation', upstreamKey: 'model' },
   { prefix: '/api/claude', service: 'model-service', module: 'generation', upstreamKey: 'model' },
   { prefix: '/api/proxy', service: 'model-service', module: 'proxy', upstreamKey: 'model' },
+  { prefix: '/api/admin/credits', service: 'auth-service', module: 'credits', upstreamKey: 'auth' },
   { prefix: '/api/admin/health', service: 'admin-gateway', module: 'health' },
   { prefix: '/api/health', service: 'gateway', module: 'health' },
 ]);

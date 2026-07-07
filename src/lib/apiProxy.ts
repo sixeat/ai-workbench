@@ -65,6 +65,7 @@ function apiUrl(path: string): string {
 
 let accessToken = '';
 let adminToken = '';
+const DEFAULT_AUTH_FETCH_TIMEOUT_MS = 60_000;
 
 function getAccessToken(): string {
   return accessToken;
@@ -92,38 +93,28 @@ function authHeaders(headers?: HeadersInit): HeadersInit {
   };
 }
 
-async function authFetch(input: RequestInfo | URL, init: RequestInit = {}, retry = true): Promise<Response> {
+function timeoutSignal(timeoutMs = DEFAULT_AUTH_FETCH_TIMEOUT_MS): AbortSignal | undefined {
+  if (typeof AbortSignal === 'undefined' || typeof AbortSignal.timeout !== 'function') return undefined;
+  return AbortSignal.timeout(timeoutMs);
+}
+
+async function authFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
   const response = await fetch(input, {
     ...init,
     credentials: 'include',
     headers: authHeaders(init.headers),
+    signal: init.signal || timeoutSignal(),
   });
 
-  if (!retry || typeof window === 'undefined') return response;
-
-  if (response.status === 401) {
-    const clone = response.clone();
-    const data = await clone.json().catch(() => ({}));
-    if (String(data.error || '').includes('Login is required')) return response;
-
-    const token = window.prompt('请输入 AI Workbench 访问令牌');
-    if (!token) return response;
-    setWorkbenchAccessToken(token);
-    return authFetch(input, init, false);
-  }
-
-  if (response.status === 403) {
-    const clone = response.clone();
-    const data = await clone.json().catch(() => ({}));
-    if (String(data.error || '').includes('Admin token')) {
-      const token = window.prompt('请输入 AI Workbench 管理员令牌');
-      if (!token) return response;
-      setWorkbenchAdminToken(token);
-      return authFetch(input, init, false);
-    }
-  }
-
   return response;
+}
+
+function apiErrorMessage(response: Response, data: any, fallback = '请求失败'): string {
+  const rawMessage = data?.error?.message || data?.error || `HTTP ${response.status}`;
+  if (response.status === 402 && /insufficient credits/i.test(String(rawMessage))) {
+    return '积分不足。请联系管理员加积分，或切换为你自己的 API Key。';
+  }
+  return rawMessage || fallback;
 }
 
 export interface ProxyAsset {
@@ -162,6 +153,9 @@ export interface ProxyTask {
   providerId?: string;
   model?: string;
   status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  creditCost?: number;
+  creditStatus?: 'none' | 'free' | 'charged' | 'refunded' | string;
+  creditKeyScope?: 'user_key' | 'server_key' | string;
   input: any;
   output: any;
   error: any;
@@ -442,6 +436,42 @@ export interface ProxyUserListResponse {
   offset?: number;
 }
 
+export interface ProxyCreditAccount {
+  userId: string;
+  balance: number;
+  reservedBalance: number;
+  totalGranted: number;
+  totalUsed: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProxyCreditTransaction {
+  id: string;
+  userId: string;
+  taskId?: string;
+  type: 'grant' | 'debit' | 'refund' | 'admin_adjustment' | 'free_usage' | string;
+  amount: number;
+  balanceAfter: number;
+  reservedAfter: number;
+  actorUserId?: string;
+  description?: string;
+  metadata?: Record<string, any>;
+  createdAt: string;
+}
+
+export interface ProxyCreditTransactionListOptions {
+  limit?: number;
+  offset?: number;
+  userId?: string;
+  taskId?: string;
+  type?: string;
+}
+
+export interface ProxyAdminCreditUser extends ProxyUser {
+  creditAccount: ProxyCreditAccount;
+}
+
 export interface ProxyRegistrationPolicy {
   allowPublicRegistration: boolean;
   requireInvitationCode: boolean;
@@ -706,6 +736,73 @@ export async function proxyListUsers(options: ProxyUserListOptions = {}): Promis
   return data;
 }
 
+export async function proxyGetMyCredits(): Promise<{ account: ProxyCreditAccount }> {
+  const response = await authFetch(apiUrl('/api/credits/me'));
+  const data = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '无法读取积分余额'));
+  return data;
+}
+
+export async function proxyListMyCreditTransactions(
+  options: ProxyCreditTransactionListOptions = {}
+): Promise<{ transactions: ProxyCreditTransaction[]; total: number }> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value == null || value === '') continue;
+    params.set(key, String(value));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const response = await authFetch(apiUrl(`/api/credits/transactions${suffix}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '无法读取积分流水'));
+  return data;
+}
+
+export async function proxyAdminListCreditUsers(
+  options: ProxyUserListOptions = {}
+): Promise<{ users: ProxyAdminCreditUser[]; count: number; total?: number; limit?: number; offset?: number }> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value == null || value === '') continue;
+    params.set(key, String(value));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const response = await authFetch(apiUrl(`/api/admin/credits/users${suffix}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '无法读取用户积分'));
+  return data;
+}
+
+export async function proxyAdminAdjustCredits(input: {
+  amount: number;
+  reason?: string;
+  userId: string;
+}): Promise<{ account: ProxyCreditAccount; transaction: ProxyCreditTransaction }> {
+  const response = await authFetch(apiUrl('/api/admin/credits/adjust'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '积分调整失败'));
+  return data;
+}
+
+export async function proxyAdminListCreditTransactions(
+  options: ProxyCreditTransactionListOptions = {}
+): Promise<{ transactions: ProxyCreditTransaction[]; total: number }> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(options)) {
+    if (value == null || value === '') continue;
+    params.set(key, String(value));
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  const response = await authFetch(apiUrl(`/api/admin/credits/transactions${suffix}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '无法读取积分流水'));
+  return data;
+}
+
 export async function proxyCreateUser(input: {
   email: string;
   password: string;
@@ -835,7 +932,7 @@ export async function proxyOpenAIChat(
   });
 
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '聊天请求失败'));
   if (response.status === 202 && data.taskId) {
     const task = await waitForTaskResult(data.taskId);
     return { ...(task.output || {}), __task: task };
@@ -856,7 +953,7 @@ export async function proxyOpenAIImage(
   });
 
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '图片生成请求失败'));
   if (response.status === 202 && data.taskId) {
     const task = await waitForTaskResult(data.taskId);
     return {
@@ -881,7 +978,7 @@ export async function proxyCreateVideoTask(
   });
 
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, '视频任务提交失败'));
   return data;
 }
 
@@ -1332,7 +1429,7 @@ export async function proxyClaudeMessage(
   });
 
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || data.error || `HTTP ${response.status}`);
+  if (!response.ok) throw new Error(apiErrorMessage(response, data, 'Claude 请求失败'));
   if (response.status === 202 && data.taskId) {
     const task = await waitForTaskResult(data.taskId);
     return task.output;

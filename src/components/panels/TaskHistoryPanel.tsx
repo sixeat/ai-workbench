@@ -549,6 +549,23 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
                   </span>
                   <span className="text-[10px] text-gray-500">{task.nodeType || task.kind}</span>
                   {task.model && <span className="truncate text-[10px] text-gray-500">{task.model}</span>}
+                  {typeof task.creditCost === 'number' && task.creditStatus && task.creditStatus !== 'none' && (
+                    <span className={cn(
+                      'rounded px-1.5 py-0.5 text-[10px]',
+                      task.creditStatus === 'refunded'
+                        ? 'bg-sky-500/10 text-sky-300'
+                        : task.creditCost > 0
+                          ? 'bg-amber-500/10 text-amber-300'
+                          : 'bg-emerald-500/10 text-emerald-300'
+                    )}
+                    >
+                      {task.creditStatus === 'refunded'
+                        ? `已退 ${task.creditCost} 积分`
+                        : task.creditCost > 0
+                          ? `-${task.creditCost} 积分`
+                          : '用户 Key 免费'}
+                    </span>
+                  )}
                   <span className="ml-auto text-[10px] text-gray-500">{new Date(task.createdAt).toLocaleString()}</span>
                 </div>
 
