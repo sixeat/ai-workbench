@@ -51,7 +51,7 @@ export interface VideoAsset {
   fileName?: string;
   prompt?: string;
   createdAt: string;
-  status?: 'queued' | 'running' | 'succeeded' | 'failed';
+  status?: 'queued' | 'submitted' | 'waiting_upstream' | 'processing' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 }
 
 export interface ScriptValue {
@@ -108,6 +108,8 @@ export interface NodeRunSummary {
   taskId?: string;
   taskIds?: string[];
   taskStatus?: string;
+  upstreamTaskId?: string;
+  upstreamStatus?: string;
   model?: string;
   providerId?: string;
   durationMs?: number;

@@ -34,7 +34,7 @@ test('text generation service writes output and logs to its task', async () => {
   const service = createTextGenerationService({
     joinUrl,
     proxyRequest: async (url, options) => {
-      requests.push({ url, body: options.body, headers: options.headers });
+      requests.push({ url, body: options.body, headers: options.headers, timeoutMs: options.timeoutMs });
       return {
         status: 200,
         data: {
@@ -80,7 +80,11 @@ test('text generation service writes output and logs to its task', async () => {
   assert.equal(updated.output.choices[0].message.content, 'hello from worker');
   assert.equal(requests[0].url, 'https://api.example.com/v1/chat/completions');
   assert.equal(requests[0].body.apiKey, undefined);
-  assert.equal(listTaskLogs(task.id).some((log) => log.event === 'upstream_text_response'), true);
+  assert.equal(requests[0].timeoutMs, 0);
+  const logs = listTaskLogs(task.id);
+  assert.equal(logs.some((log) => log.event === 'upstream_text_submitted'), true);
+  assert.equal(logs.some((log) => log.event === 'upstream_text_response'), true);
+  assert.equal(JSON.stringify(logs).includes('direct-key'), false);
 });
 
 test('text generation rejects models without chat capability before upstream request', async () => {

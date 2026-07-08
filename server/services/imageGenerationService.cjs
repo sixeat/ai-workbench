@@ -15,6 +15,7 @@ const {
 } = require('./assetQuotaService.cjs');
 const {
   addCredentialFallbackLog,
+  credentialAttemptLogData,
   credentialAttempts,
   shouldFallbackAfterUpstreamResult,
 } = require('./credentialFallbackService.cjs');
@@ -24,6 +25,8 @@ const { getImageProviderAdapter } = require('./imageProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
 const { assetRepository: defaultAssetRepository } = require('../repositories/assetRepository.cjs');
 const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
+
+const GENERATION_FETCH_TIMEOUT_MS = Number(process.env.WORKBENCH_GENERATION_FETCH_TIMEOUT_MS || 0);
 
 function createImageTask(userId, body, status = 'queued', taskRepository = defaultTaskRepository) {
   return taskRepository.createTask({
@@ -211,6 +214,13 @@ function createImageGenerationService({
           userId: _userId,
           providerId: _providerId,
           upstreamTaskIds: _upstreamTaskIds,
+          billing: _billing,
+          creditCost: _creditCost,
+          creditKeyScope: _creditKeyScope,
+          creditStatus: _creditStatus,
+          hasNegativePrompt: _hasNegativePrompt,
+          hasReferenceImage: _hasReferenceImage,
+          hasReferenceImages: _hasReferenceImages,
           ...imageBody
         } = taskBody;
 
@@ -250,10 +260,31 @@ function createImageGenerationService({
           body: capabilityResult.body,
           req: workerReq,
         });
+        taskRepository.addTaskLog(activeTask.id, {
+          event: 'upstream_image_submitted',
+          message: 'Image request submitted to upstream provider.',
+          data: {
+            ...credentialAttemptLogData(credentials, attemptIndex),
+            providerId,
+            model: capabilityResult.body.model || '',
+          },
+        });
         const result = await proxyRequest(joinUrl(baseUrl, adapter.endpoint), {
           method: 'POST',
           headers: request.headers,
           body: request.body,
+          timeoutMs: GENERATION_FETCH_TIMEOUT_MS,
+        });
+        taskRepository.addTaskLog(activeTask.id, {
+          event: 'upstream_image_response',
+          message: `Image upstream responded with HTTP ${result.status}.`,
+          data: {
+            ...credentialAttemptLogData(credentials, attemptIndex),
+            upstreamStatus: result.status,
+            upstreamStatusText: result.statusText || '',
+            providerId,
+            model: capabilityResult.body.model || '',
+          },
         });
 
         if (result.status >= 400) {

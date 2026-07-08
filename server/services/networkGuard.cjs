@@ -1,8 +1,14 @@
 const dns = require('dns').promises;
 const net = require('net');
+const { Agent, fetch: undiciFetch } = require('undici');
 
 const DEFAULT_TIMEOUT_MS = Number(process.env.WORKBENCH_FETCH_TIMEOUT_MS || 60_000);
 const DEFAULT_MAX_REDIRECTS = Number(process.env.WORKBENCH_FETCH_MAX_REDIRECTS || 5);
+const NO_TIMEOUT_DISPATCHER = new Agent({
+  bodyTimeout: 0,
+  headersTimeout: 0,
+});
+const DEFAULT_FETCH = global.fetch;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 const SENSITIVE_REDIRECT_HEADERS = new Set([
   'authorization',
@@ -91,11 +97,14 @@ function stripSensitiveHeaders(headers) {
 }
 
 async function fetchWithTimeout(url, options = {}) {
-  const timeoutMs = Number(options.timeoutMs || DEFAULT_TIMEOUT_MS);
+  const timeoutMs = Object.hasOwn(options, 'timeoutMs')
+    ? Number(options.timeoutMs)
+    : DEFAULT_TIMEOUT_MS;
+  const shouldUseTimeout = Number.isFinite(timeoutMs) && timeoutMs > 0;
   const maxRedirects = Number(options.maxRedirects ?? DEFAULT_MAX_REDIRECTS);
   const validateRedirectUrl = options.validateRedirectUrl;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = shouldUseTimeout ? new AbortController() : null;
+  const timeout = shouldUseTimeout ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
   try {
     const {
@@ -104,16 +113,19 @@ async function fetchWithTimeout(url, options = {}) {
       validateRedirectUrl: _validateRedirectUrl,
       ...baseFetchOptions
     } = options;
-    const signal = baseFetchOptions.signal || controller.signal;
+    const signal = baseFetchOptions.signal || controller?.signal;
     let currentUrl = String(url);
+    const useNoTimeoutDispatcher = !shouldUseTimeout && !baseFetchOptions.dispatcher && global.fetch === DEFAULT_FETCH;
+    const fetchImpl = useNoTimeoutDispatcher ? undiciFetch : global.fetch;
     let fetchOptions = {
       ...baseFetchOptions,
       redirect: 'manual',
-      signal,
+      ...(signal ? { signal } : {}),
+      ...(useNoTimeoutDispatcher ? { dispatcher: NO_TIMEOUT_DISPATCHER } : {}),
     };
 
     for (let redirectCount = 0; redirectCount <= maxRedirects; redirectCount += 1) {
-      const response = await fetch(currentUrl, fetchOptions);
+      const response = await fetchImpl(currentUrl, fetchOptions);
       if (!REDIRECT_STATUSES.has(response.status)) return response;
 
       const location = response.headers.get('location');
@@ -138,7 +150,7 @@ async function fetchWithTimeout(url, options = {}) {
 
     throw Object.assign(new Error('Too many redirects.'), { status: 400 });
   } finally {
-    clearTimeout(timeout);
+    if (timeout) clearTimeout(timeout);
   }
 }
 

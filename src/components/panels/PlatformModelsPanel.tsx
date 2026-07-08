@@ -19,6 +19,8 @@ import {
 import { resolveModelCapabilities } from '../../lib/modelCapabilities';
 import { cn } from '../../lib/utils';
 import type { ModelCapabilities } from '../../types/modelCapabilities';
+import { DarkSelect } from '../ui/DarkSelect';
+import { PanelButton } from '../ui/PanelButton';
 
 const emptyModelForm = {
   id: '',
@@ -533,13 +535,14 @@ export function PlatformModelsPanel() {
           <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
           刷新
         </button>
-        <button
+        <PanelButton
           onClick={startNewModel}
-          className="inline-flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent-hover"
+          variant="primary"
+          size="md"
         >
           <Plus className="h-3.5 w-3.5" />
           新建平台模型
-        </button>
+        </PanelButton>
       </div>
 
       {notice && <div className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">{notice}</div>}
@@ -1125,19 +1128,15 @@ function Select({
   value: string;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="text-[10px] text-gray-500">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-      >
-        <option value="">请选择</option>
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>{option.label}</option>
-        ))}
-      </select>
-    </label>
+    <DarkSelect
+      label={label}
+      value={value}
+      onChange={onChange}
+      options={[
+        { label: '请选择', value: '' },
+        ...options,
+      ]}
+    />
   );
 }
 

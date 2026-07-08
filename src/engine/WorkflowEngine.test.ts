@@ -384,9 +384,11 @@ test('executeNodeIdsOnGraph preserves queued video task even before asset url ex
 
   await executeNodeIdsOnGraph(new Set(['video']), '运行视频节点', nodes, [], sink);
 
-  assert.equal(nodes[0].data.status, 'completed');
+  assert.equal(nodes[0].data.status, 'running');
+  assert.equal(nodes[0].data.lastRun?.status, 'running');
   assert.equal(nodes[0].data.lastRun?.taskId, 'video-task-1');
   assert.equal(nodes[0].data.lastRun?.taskStatus, 'queued');
+  assert.equal(nodes[0].data.lastRun?.upstreamTaskId, 'upstream-video-task-1');
   assert.equal(nodes[0].data.lastRun?.model, 'doubao-seedance-test');
   assert.equal(nodes[0].data.lastRun?.providerId, 'seedance');
   assert.equal(nodes[0].data.lastRun?.assetCount, 0);

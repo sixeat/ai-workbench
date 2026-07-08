@@ -112,3 +112,27 @@ test('fetchWithTimeout strips sensitive headers on cross-origin redirects', asyn
     global.fetch = originalFetch;
   }
 });
+
+test('fetchWithTimeout does not attach an abort signal when timeout is zero', async () => {
+  const originalFetch = global.fetch;
+  const requests = [];
+  global.fetch = async (url, options) => {
+    requests.push({ url, signal: options.signal });
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    const response = await fetchWithTimeout('https://api.example/slow-generation', {
+      timeoutMs: 0,
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].signal, undefined);
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

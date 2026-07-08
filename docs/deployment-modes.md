@@ -1,14 +1,14 @@
 # AI Workbench 部署模式清单
 
-结论：现在推荐三种运行方式。开发时用本地开发模式；小规模给朋友用时用单机服务器模式；正式扩展时用 API 和 Worker 分进程模式。
+结论：默认采用单进程 SaaS 模式。开发时用本地开发模式；上线先用单机服务器模式；API 和 Worker 分进程只作为高级扩展，不作为第一版默认部署方式。
 
 ## 5 分钟版
 
-| 模式 | 前端 | 后端 API | Worker | 适合场景 |
+| 模式 | 前端 | 后端 API | Worker | 定位 |
 | --- | --- | --- | --- | --- |
 | 本地开发 | Vite dev server | Node 本地进程 | 同进程 | 开发、调试、临时验证 |
-| 单机服务器 | Nginx/OSS/CDN 静态托管 | Node 同进程 | 同进程 | 小团队、朋友共用、低并发 |
-| 分进程服务器 | Nginx/OSS/CDN 静态托管 | `start:api` | `start:worker` | 生成任务多、需要更稳的响应 |
+| 单机服务器 | Nginx/OSS/CDN 静态托管 | `start:server` | 同进程 | 第一版上线默认方案 |
+| 分进程服务器 | Nginx/OSS/CDN 静态托管 | `start:api` | `start:worker` | 高级扩展方案 |
 
 正式服务器不要让 Node 后端托管前端页面。后端只提供 `/api/*`，前端单独托管 `dist`。
 
@@ -48,14 +48,14 @@ IMAGE_OUTPUT_DIR=./outputs
 
 ## 模式二：单机服务器
 
-为什么用它：部署简单。API 和 Worker 在同一个 Node 进程里，前端仍然单独静态托管。
+为什么用它：部署简单。它是当前 SaaS 版本的默认上线方式。API 和 Worker 在同一个 Node 进程里，前端仍然单独静态托管。
 
 启动方式：
 
 ```bash
 npm install
 npm run check:deploy
-npm run start:all
+npm run start:server
 ```
 
 PM2 常驻：
@@ -108,7 +108,7 @@ npm run build
 
 ## 模式三：API 和 Worker 分进程
 
-为什么用它：生成任务慢也不会拖住前端请求。API 只入队，Worker 只消费任务。
+为什么用它：当生成任务明显拖慢 API 响应时，再把 API 和 Worker 拆开。它不是第一版默认方案。
 
 API 进程：
 
@@ -146,7 +146,7 @@ pm2 save
 
 ## 配置对照
 
-| 配置项 | 本地开发 | 单机服务器 | 分进程服务器 |
+| 配置项 | 本地开发 | 默认单机服务器 | 高级分进程服务器 |
 | --- | --- | --- | --- |
 | `WORKBENCH_DEPLOYMENT_MODE` | `local` | `server` | `server` |
 | `WORKBENCH_SERVE_STATIC` | 可留空 | `false` | `false` |

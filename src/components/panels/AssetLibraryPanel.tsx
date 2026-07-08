@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { ArrowDown, ArrowUp, CheckSquare, Copy, ExternalLink, FileVideo, FolderOpen, ImagePlus, Pencil, Plus, RefreshCw, Save, Square, Star, Trash2, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { DarkSelect } from '../ui/DarkSelect';
+import { PanelButton } from '../ui/PanelButton';
 import {
   proxyAssetUrl,
   proxyAddAssetToCollection,
@@ -662,7 +664,7 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                 className="h-20 w-full resize-none rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
               />
               <div className="flex items-center justify-end gap-2">
-                <button
+                <PanelButton
                   onClick={() => {
                     setShowCreateForm(false);
                     setNewCollectionName('');
@@ -670,13 +672,14 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                     setNewCollectionCategory('character');
                     setNewCollectionRolesText('');
                   }}
-                  className="rounded-md px-2 py-1 text-xs text-gray-400 hover:bg-gray-700/50 hover:text-white"
+                  variant="ghost"
+                  size="xs"
                 >
                   取消
-                </button>
-                <button onClick={() => void createCollection()} className="rounded-md bg-accent px-2.5 py-1 text-xs text-white hover:bg-accent-hover">
+                </PanelButton>
+                <PanelButton onClick={() => void createCollection()} variant="primary" size="xs">
                   创建
-                </button>
+                </PanelButton>
               </div>
             </div>
           )}
@@ -747,15 +750,11 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                   placeholder="集合名称"
                   className="rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-sm text-white placeholder-gray-600 focus:border-accent focus:outline-none"
                 />
-                <select
+                <DarkSelect
                   value={editCollectionCategory}
-                  onChange={(event) => setEditCollectionCategory(event.target.value)}
-                  className="rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                >
-                  {collectionTemplates.map((template) => (
-                    <option key={template.category} value={template.category}>{template.label}</option>
-                  ))}
-                </select>
+                  onChange={(value) => setEditCollectionCategory(value as CollectionCategory)}
+                  options={collectionTemplates.map((template) => ({ label: template.label, value: template.category }))}
+                />
               </div>
               <textarea
                 value={editCollectionDescription}
@@ -782,7 +781,7 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                 />
               </div>
               <div className="flex justify-end gap-2">
-                <button
+                <PanelButton
                   onClick={() => {
                     setEditingCollection(false);
                     setEditCollectionName(selectedCollection.name);
@@ -790,14 +789,15 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                     setEditCollectionCategory(selectedCollection.category);
                     setEditCollectionRolesText(formatSuggestedRolesText(getSuggestedRoles(selectedCollection, collectionTemplates)));
                   }}
-                  className="rounded-md px-2.5 py-1 text-xs text-gray-400 hover:bg-gray-700/50 hover:text-white"
+                  variant="ghost"
+                  size="xs"
                 >
                   取消
-                </button>
-                <button onClick={() => void saveCollectionEdits()} className="inline-flex items-center gap-1 rounded-md bg-accent px-2.5 py-1 text-xs text-white hover:bg-accent-hover">
+                </PanelButton>
+                <PanelButton onClick={() => void saveCollectionEdits()} variant="primary" size="xs">
                   <Save className="h-3 w-3" />
                   保存
-                </button>
+                </PanelButton>
               </div>
             </div>
           ) : (
@@ -809,20 +809,22 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                 )}
                 {selectedCollection && (
                   <div className="ml-auto flex items-center gap-1">
-                    <button
+                    <PanelButton
                       onClick={() => setEditingCollection(true)}
-                      className="inline-flex items-center gap-1 rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-300 hover:border-accent hover:text-accent"
+                      variant="secondary"
+                      size="xs"
                     >
                       <Pencil className="h-3 w-3" />
                       编辑
-                    </button>
-                    <button
+                    </PanelButton>
+                    <PanelButton
                       onClick={() => void deleteSelectedCollection()}
-                      className="inline-flex items-center gap-1 rounded-md border border-red-500/20 px-2 py-1 text-[10px] text-red-300 hover:bg-red-500/10"
+                      variant="danger"
+                      size="xs"
                     >
                       <Trash2 className="h-3 w-3" />
                       删除
-                    </button>
+                    </PanelButton>
                   </div>
                 )}
               </div>
@@ -879,14 +881,15 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                     </>
                   )}
                   {selectedRoles.length > 0 && (
-                    <select
+                    <DarkSelect
                       value={collectionRoleFilter}
-                      onChange={(event) => setCollectionRoleFilter(event.target.value)}
-                      className="rounded-md border border-panel-border bg-panel-bg px-2 py-1 text-[10px] text-gray-300 focus:border-accent focus:outline-none"
-                    >
-                      <option value="all">全部角色</option>
-                      {selectedRoles.map((role) => <option key={role} value={role}>{role}</option>)}
-                    </select>
+                      onChange={setCollectionRoleFilter}
+                      options={[
+                        { label: '全部角色', value: 'all' },
+                        ...selectedRoles.map((role) => ({ label: role, value: role })),
+                      ]}
+                      buttonClassName="px-2 py-1 text-[10px]"
+                    />
                   )}
                   <span className="text-[10px] text-gray-500">{filteredCollectionAssets.length}/{selectedCollection.assets.length} 项</span>
                 </div>
@@ -928,26 +931,26 @@ export function AssetLibraryPanel({ isOpen, onClose }: AssetLibraryPanelProps) {
                       >
                         {allVisibleUngroupedSelected ? '清空选择' : '全选当前'}
                       </button>
-                      <button
+                      <PanelButton
                         type="button"
                         onClick={() => void addSelectedAssetsToCurrentCollection()}
                         disabled={selectedUngroupedAssetIds.length === 0}
-                        className="rounded-md bg-accent px-2 py-1 text-[10px] text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                        variant="primary"
+                        size="xs"
                       >
                         批量加入{selectedUngroupedAssetIds.length > 0 ? ` ${selectedUngroupedAssetIds.length}` : ''}
-                      </button>
+                      </PanelButton>
                     </>
                   )}
                   {selectedCollection && selectedRoles.length > 0 && (
                     <>
                       <span className="text-[10px] text-gray-500">加入为</span>
-                      <select
+                      <DarkSelect
                         value={assetRole}
-                        onChange={(event) => setAssetRole(event.target.value)}
-                        className="rounded-md border border-panel-border bg-panel-bg px-2 py-1 text-[10px] text-gray-300 focus:border-accent focus:outline-none"
-                      >
-                        {selectedRoles.map((role) => <option key={role} value={role}>{role}</option>)}
-                      </select>
+                        onChange={setAssetRole}
+                        options={selectedRoles.map((role) => ({ label: role, value: role }))}
+                        buttonClassName="px-2 py-1 text-[10px]"
+                      />
                     </>
                   )}
                   <span className="text-[10px] text-gray-500">加入集合后会从这里移除</span>

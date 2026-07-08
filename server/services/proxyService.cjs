@@ -57,6 +57,8 @@ async function proxyRequest(targetUrl, options = {}) {
 
   const response = await fetchWithTimeout(targetUrl, {
     ...fetchOptions,
+    ...(Object.hasOwn(options, 'timeoutMs') ? { timeoutMs: options.timeoutMs } : {}),
+    ...(options.maxRedirects != null ? { maxRedirects: options.maxRedirects } : {}),
     ...(shouldGuardNetwork ? { validateRedirectUrl: assertPublicHttpUrl } : {}),
   });
   const text = await response.text();

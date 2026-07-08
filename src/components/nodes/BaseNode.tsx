@@ -36,11 +36,14 @@ import {
   proxyAddAssetToCollection,
   proxyAssetUrl,
   proxyCreateAssetCollection,
+  proxyGetTask,
+  proxyGetVideoTask,
   proxyListAssets,
   proxyUploadAsset,
   type ProxyAsset,
   type ProxyAssetCollection,
   type ProxyModelCapabilities,
+  type ProxyTask,
 } from '../../lib/apiProxy';
 import { getNodeDefinition } from '../../data/nodeRegistry';
 import { getProviderDefaultModels } from '../../data/providerRegistry';
@@ -149,6 +152,146 @@ interface BaseNodeProps {
   selected?: boolean;
 }
 
+function asRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
+}
+
+function taskErrorMessage(task: ProxyTask): string | undefined {
+  const error = asRecord(task.error);
+  return firstString(error?.message, task.error);
+}
+
+function proxyTaskOutput(task: ProxyTask): Record<string, any> {
+  return asRecord(task.output) || {};
+}
+
+function proxyTaskUpstream(task: ProxyTask): Record<string, any> {
+  return asRecord(proxyTaskOutput(task).upstream) || {};
+}
+
+function proxyTaskUpstreamTaskId(task: ProxyTask): string {
+  const upstream = proxyTaskUpstream(task);
+  return firstString(upstream.taskId, upstream.id);
+}
+
+function proxyTaskUpstreamStatus(task: ProxyTask): string {
+  const upstream = proxyTaskUpstream(task);
+  return firstString(upstream.status, upstream.rawStatus);
+}
+
+function proxyAssetToRunAsset(asset: ProxyAsset): NodeRunAssetSummary {
+  return {
+    id: asset.id,
+    type: asset.type,
+    url: asset.url,
+    fileName: asset.fileName,
+  };
+}
+
+function outputVideoAsset(task: ProxyTask): ProxyAsset | null {
+  const video = asRecord(proxyTaskOutput(task).video);
+  if (video?.url) {
+    return {
+      id: firstString(video.id, task.id),
+      type: 'video',
+      url: String(video.url),
+      fileName: firstString(video.fileName),
+    };
+  }
+  return task.assets?.find((asset) => asset.type === 'video' && asset.url) || null;
+}
+
+function taskRunAssets(task: ProxyTask): NodeRunAssetSummary[] {
+  const assets = (task.assets || []).filter((asset) => asset.url).map(proxyAssetToRunAsset);
+  const video = outputVideoAsset(task);
+  if (video && !assets.some((asset) => asset.id === video.id || asset.url === video.url)) {
+    assets.unshift(proxyAssetToRunAsset(video));
+  }
+  return assets;
+}
+
+function nodeStatusFromTask(task: ProxyTask): BaseNodeProps['data']['status'] {
+  if (task.status === 'succeeded') return 'completed';
+  if (task.status === 'failed' || task.status === 'cancelled') return 'error';
+  return 'running';
+}
+
+function runStatusFromTask(task: ProxyTask): NodeRunSummaryData['status'] {
+  if (task.status === 'succeeded') return 'completed';
+  if (task.status === 'failed' || task.status === 'cancelled') return 'error';
+  return 'running';
+}
+
+function outputsFromTask(currentOutputs: Record<string, any>, task: ProxyTask): Record<string, any> {
+  const upstream = proxyTaskUpstream(task);
+  const videoAsset = outputVideoAsset(task);
+  const currentVideo = asRecord(currentOutputs.video);
+  const nextVideo = videoAsset || currentVideo ? {
+    ...(currentVideo || {}),
+    type: 'video',
+    id: firstString(videoAsset?.id, currentVideo?.id, task.id),
+    url: firstString(videoAsset?.url, currentVideo?.url),
+    fileName: firstString(videoAsset?.fileName, currentVideo?.fileName),
+    createdAt: firstString(currentVideo?.createdAt, task.createdAt),
+    status: task.status,
+  } : currentOutputs.video;
+
+  return {
+    ...currentOutputs,
+    ...(nextVideo ? { video: nextVideo } : {}),
+    task: {
+      ...(asRecord(currentOutputs.task) || {}),
+      id: task.id,
+      type: task.nodeType === 'video' || task.kind === 'video' ? 'videoTask' : 'task',
+      status: task.status,
+      providerId: task.providerId,
+      model: task.model,
+      upstream,
+      upstreamTaskId: proxyTaskUpstreamTaskId(task),
+      upstreamStatus: proxyTaskUpstreamStatus(task),
+      error: task.error,
+      updatedAt: task.updatedAt,
+    },
+  };
+}
+
+function lastRunFromTask(current: NodeRunSummaryData | undefined, task: ProxyTask): NodeRunSummaryData {
+  const assets = taskRunAssets(task);
+  return {
+    status: runStatusFromTask(task),
+    taskId: task.id,
+    taskIds: [...new Set([...(current?.taskIds || []), task.id].filter(Boolean))],
+    taskStatus: task.status,
+    upstreamTaskId: proxyTaskUpstreamTaskId(task) || current?.upstreamTaskId,
+    upstreamStatus: proxyTaskUpstreamStatus(task) || current?.upstreamStatus,
+    model: task.model || current?.model,
+    providerId: task.providerId || current?.providerId,
+    durationMs: task.durationMs ?? current?.durationMs,
+    assetCount: assets.length,
+    assets,
+    error: taskErrorMessage(task),
+    startedAt: current?.startedAt || task.createdAt,
+    completedAt: task.status === 'succeeded' || task.status === 'failed' || task.status === 'cancelled'
+      ? task.updatedAt
+      : current?.completedAt,
+  };
+}
+
+function shouldQueryVideoUpstream(task: ProxyTask): boolean {
+  return (
+    (task.nodeType === 'video' || task.kind === 'video')
+    && task.status === 'running'
+    && Boolean(proxyTaskUpstreamTaskId(task))
+  );
+}
+
 export function BaseNode({ id, data, selected }: BaseNodeProps) {
   const definition = getNodeDefinition(data.type);
   const color = NODE_COLORS[data.type] || '#6366f1';
@@ -176,6 +319,9 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   const [addingRunAssetId, setAddingRunAssetId] = useState('');
   const [runAssetNotice, setRunAssetNotice] = useState('');
   const [runAssetError, setRunAssetError] = useState('');
+  const [refreshingTaskId, setRefreshingTaskId] = useState('');
+  const [taskRefreshNotice, setTaskRefreshNotice] = useState('');
+  const [taskRefreshError, setTaskRefreshError] = useState('');
 
   const selectedPlatformModel = platformModels.find((model) => model.id === data.config.platformModelId) || null;
   const selectedInstanceId = String(data.config.instanceId || '');
@@ -232,6 +378,12 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     const timer = window.setTimeout(() => setRunAssetNotice(''), 1600);
     return () => window.clearTimeout(timer);
   }, [runAssetNotice]);
+
+  useEffect(() => {
+    if (!taskRefreshNotice) return;
+    const timer = window.setTimeout(() => setTaskRefreshNotice(''), 1800);
+    return () => window.clearTimeout(timer);
+  }, [taskRefreshNotice]);
 
   const handleInputChange = useCallback(
     (value: string) => {
@@ -420,6 +572,58 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     [data.label, ensureNodeOutputCollection]
   );
 
+  const applyTaskToNode = useCallback(
+    (task: ProxyTask) => {
+      const nextStatus = nodeStatusFromTask(task);
+      updateNodeData(id, {
+        status: nextStatus,
+        outputs: outputsFromTask(data.outputs, task),
+        lastRun: lastRunFromTask(data.lastRun, task),
+        executionTime: task.durationMs ?? data.executionTime,
+        error: nextStatus === 'error' ? taskErrorMessage(task) : undefined,
+      });
+
+      if (task.status === 'succeeded') {
+        setTaskRefreshNotice('任务已完成，产物已同步。');
+      } else if (task.status === 'failed' || task.status === 'cancelled') {
+        setTaskRefreshError(taskErrorMessage(task) || `任务状态为 ${task.status}`);
+      } else if (proxyTaskUpstreamTaskId(task)) {
+        setTaskRefreshNotice('上游仍在生成，稍后再刷新。');
+      } else {
+        setTaskRefreshNotice('任务仍在排队，等待后端提交上游。');
+      }
+    },
+    [data.executionTime, data.lastRun, data.outputs, id, updateNodeData]
+  );
+
+  const handleRefreshTask = useCallback(
+    async (taskId: string) => {
+      setRefreshingTaskId(taskId);
+      setTaskRefreshNotice('');
+      setTaskRefreshError('');
+
+      try {
+        const local = await proxyGetTask(taskId);
+        let task = local.task;
+        if (shouldQueryVideoUpstream(task)) {
+          const video = await proxyGetVideoTask(task.id);
+          task = video.task || task;
+        }
+        applyTaskToNode(task);
+      } catch (error) {
+        try {
+          const fallback = await proxyGetTask(taskId);
+          applyTaskToNode(fallback.task);
+        } catch {
+          setTaskRefreshError(error instanceof Error ? error.message : '任务状态刷新失败');
+        }
+      } finally {
+        setRefreshingTaskId('');
+      }
+    },
+    [applyTaskToNode]
+  );
+
   const statusIcon = {
     idle: null,
     running: <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400" />,
@@ -524,6 +728,10 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
             window.open(url, '_blank', 'noopener,noreferrer');
           }}
           onAddAsset={(asset) => void handleAddRunAssetToCollection(asset)}
+          onRefreshTask={(taskId) => void handleRefreshTask(taskId)}
+          refreshingTaskId={refreshingTaskId}
+          taskRefreshNotice={taskRefreshNotice}
+          taskRefreshError={taskRefreshError}
           addingAssetId={addingRunAssetId}
           assetActionNotice={runAssetNotice}
           assetActionError={runAssetError}

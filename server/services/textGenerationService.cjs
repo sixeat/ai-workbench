@@ -11,6 +11,8 @@ const {
 const { credentialUsageError } = require('./credentialService.cjs');
 const { getTextProviderAdapter } = require('./textProviderAdapters.cjs');
 
+const GENERATION_FETCH_TIMEOUT_MS = Number(process.env.WORKBENCH_GENERATION_FETCH_TIMEOUT_MS || 0);
+
 function stripSecretFields(body = {}) {
   const {
     apiKey: _apiKey,
@@ -153,10 +155,20 @@ function createTextGenerationService({
         }
         const adapter = getTextProviderAdapter(providerId, requestKind === 'claude' ? 'anthropic' : undefined);
         const request = adapter.buildRequest({ apiKey, body: effectiveBody, providerId });
+        taskRepository.addTaskLog(activeTask.id, {
+          event: 'upstream_text_submitted',
+          message: 'Text request submitted to upstream provider.',
+          data: {
+            ...credentialAttemptLogData(credentials, attemptIndex),
+            providerId,
+            model: effectiveBody.model || '',
+          },
+        });
         const result = await proxyRequest(joinUrl(baseUrl, adapter.endpoint(providerId)), {
           method: 'POST',
           headers: request.headers,
           body: request.body,
+          timeoutMs: GENERATION_FETCH_TIMEOUT_MS,
         });
 
         taskRepository.addTaskLog(activeTask.id, {

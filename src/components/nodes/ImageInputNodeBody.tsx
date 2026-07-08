@@ -8,6 +8,7 @@ import {
   listImageCollectionCategories,
 } from '../../lib/imageAssetSelection';
 import { cn } from '../../lib/utils';
+import { DarkSelect } from '../ui/DarkSelect';
 
 interface ImageInputNodeBodyProps {
   url?: string;
@@ -216,42 +217,41 @@ export function ImageInputNodeBody({
                 className="w-full rounded-md border border-panel-border bg-canvas-bg py-1.5 pl-7 pr-2 text-[10px] text-gray-200 placeholder-gray-600 focus:border-accent focus:outline-none"
               />
             </label>
-            <select
+            <DarkSelect
               value={libraryCategory}
-              onChange={(event) => setLibraryCategory(event.target.value)}
-              className="rounded-md border border-panel-border bg-canvas-bg px-2 py-1.5 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+              onChange={setLibraryCategory}
+              buttonClassName="px-2 py-1.5 text-[10px]"
               title="按素材类型筛选"
-            >
-              <option value="all">全部类型</option>
-              {categoryOptions.map((category) => (
-                <option key={category.id} value={category.id}>{category.label}</option>
-              ))}
-            </select>
+              options={[
+                { label: '全部类型', value: 'all' },
+                ...categoryOptions.map((category) => ({ label: category.label, value: category.id })),
+              ]}
+            />
           </div>
           <div className="mb-2 grid grid-cols-2 gap-2">
-            <select
+            <DarkSelect
               value={libraryCollectionId}
-              onChange={(event) => setLibraryCollectionId(event.target.value)}
-              className="rounded-md border border-panel-border bg-canvas-bg px-2 py-1.5 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+              onChange={setLibraryCollectionId}
+              buttonClassName="px-2 py-1.5 text-[10px]"
               title="按集合筛选"
-            >
-              <option value="all">全部图片</option>
-              {libraryCategory === 'all' && libraryRole === 'all' && <option value={UNGROUPED_IMAGE_COLLECTION_ID}>未分组</option>}
-              {libraryOptions.map((collection) => (
-                <option key={collection.id} value={collection.id}>{collection.name}</option>
-              ))}
-            </select>
-            <select
+              options={[
+                { label: '全部图片', value: 'all' },
+                ...(libraryCategory === 'all' && libraryRole === 'all'
+                  ? [{ label: '未分组', value: UNGROUPED_IMAGE_COLLECTION_ID }]
+                  : []),
+                ...libraryOptions.map((collection) => ({ label: collection.name, value: collection.id })),
+              ]}
+            />
+            <DarkSelect
               value={libraryRole}
-              onChange={(event) => setLibraryRole(event.target.value)}
-              className="rounded-md border border-panel-border bg-canvas-bg px-2 py-1.5 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+              onChange={setLibraryRole}
+              buttonClassName="px-2 py-1.5 text-[10px]"
               title="按素材角色筛选"
-            >
-              <option value="all">全部角色</option>
-              {roleOptions.map((role) => (
-                <option key={role} value={role}>{role}</option>
-              ))}
-            </select>
+              options={[
+                { label: '全部角色', value: 'all' },
+                ...roleOptions.map((role) => ({ label: role, value: role })),
+              ]}
+            />
           </div>
           {libraryLoading ? (
             <div className="flex items-center justify-center gap-1.5 rounded-md border border-dashed border-panel-border py-5 text-[10px] text-gray-500">

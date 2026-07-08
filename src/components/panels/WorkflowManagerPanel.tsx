@@ -18,6 +18,7 @@ import {
 } from '../../stores/workflowDb';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { PanelButton } from '../ui/PanelButton';
 
 interface WorkflowManagerPanelProps {
   isOpen: boolean;
@@ -556,16 +557,14 @@ function TabButton({ active, icon, children, onClick }: { active: boolean; icon:
 
 function ActionButton({ children, icon, onClick, primary }: { children: React.ReactNode; icon: React.ReactNode; onClick: () => void; primary?: boolean }) {
   return (
-    <button
+    <PanelButton
       onClick={onClick}
-      className={cn(
-        'flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors',
-        primary ? 'bg-accent text-white hover:bg-accent-hover' : 'border border-panel-border bg-panel-bg text-gray-300 hover:border-accent hover:text-accent'
-      )}
+      variant={primary ? 'primary' : 'secondary'}
+      size="sm"
     >
       {icon}
       {children}
-    </button>
+    </PanelButton>
   );
 }
 

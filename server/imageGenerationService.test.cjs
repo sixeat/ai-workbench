@@ -13,6 +13,7 @@ const {
   db,
   getTask,
   listAssets,
+  listTaskLogs,
 } = require('./db.cjs');
 const { LocalAssetStorage } = require('./assetStorage.cjs');
 const {
@@ -178,6 +179,74 @@ test('image generation service normalizes camelCase provider options before capa
   );
   assert.equal(capturedRequest.options.body.parameters.prompt_extend, true);
   assert.equal(Object.hasOwn(capturedRequest.options.body, 'promptExtend'), false);
+  assert.equal(capturedRequest.options.timeoutMs, 0);
+  const logs = listTaskLogs(task.id);
+  assert.equal(logs.some((log) => log.event === 'upstream_image_submitted'), true);
+  assert.equal(logs.some((log) => log.event === 'upstream_image_response'), true);
+  assert.equal(JSON.stringify(logs).includes('image-key'), false);
+});
+
+test('image generation strips local billing metadata before upstream request', async () => {
+  let capturedBody = null;
+  const user = createUser({
+    email: 'image-strip-local-fields@example.com',
+    username: 'image-strip-local-fields@example.com',
+    name: 'Image Strip Local Fields',
+    passwordHash: 'test',
+  });
+  const service = createImageGenerationService({
+    assetStorage: new LocalAssetStorage(path.join(tempDir, 'outputs-strip-local-fields')),
+    joinUrl,
+    publicAsset: (asset) => asset,
+    proxyRequest: async (_url, options) => {
+      capturedBody = options.body;
+      return {
+        status: 400,
+        statusText: 'Bad Request',
+        headers: {},
+        data: { error: { message: 'stop after request capture' } },
+      };
+    },
+    resolveApiCredentials: async () => ({
+      baseUrl: 'https://api.example.com',
+      apiKey: 'image-key',
+      providerId: 'openai-compatible',
+    }),
+  });
+  const body = {
+    providerId: 'openai-compatible',
+    model: 'gpt-image-2',
+    prompt: 'a product photo',
+    size: '1024x1024',
+    n: 1,
+    billing: { billable: true },
+    creditCost: 10,
+    creditKeyScope: 'server_key',
+    creditStatus: 'charged',
+    hasNegativePrompt: false,
+    hasReferenceImage: false,
+    hasReferenceImages: false,
+  };
+  const task = service.createImageTask(user.id, body, 'running');
+
+  await service.runImageTask({
+    req: { headers: { host: 'workbench.example' }, protocol: 'https' },
+    userId: user.id,
+    body,
+    secrets: {},
+    task,
+  });
+
+  assert.ok(capturedBody);
+  assert.equal(capturedBody.model, 'gpt-image-2');
+  assert.equal(capturedBody.prompt, 'a product photo');
+  assert.equal(Object.hasOwn(capturedBody, 'billing'), false);
+  assert.equal(Object.hasOwn(capturedBody, 'creditCost'), false);
+  assert.equal(Object.hasOwn(capturedBody, 'creditKeyScope'), false);
+  assert.equal(Object.hasOwn(capturedBody, 'creditStatus'), false);
+  assert.equal(Object.hasOwn(capturedBody, 'hasNegativePrompt'), false);
+  assert.equal(Object.hasOwn(capturedBody, 'hasReferenceImage'), false);
+  assert.equal(Object.hasOwn(capturedBody, 'hasReferenceImages'), false);
 });
 
 test('image generation enforces user asset storage quota before saving generated payloads', async () => {

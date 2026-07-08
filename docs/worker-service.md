@@ -1,18 +1,24 @@
 # Worker Service 拆分说明
 
-结论：`worker-service` 是第一步真正拆出来的后端服务边界。它让 Gateway 可以把任务、图片生成、视频生成请求转发到独立进程，同时保留现在的单体运行方式。
+结论：`worker-service` 是高级拆分边界，不是第一版默认部署方式。默认先用 `npm run start:server` 跑单进程 SaaS；当生成任务压力明显影响 API 响应时，再启用 worker-service。
 
 ## 5 分钟版
 
 | 模式 | 启动命令 | 用途 |
 | --- | --- | --- |
-| 单体模式 | `npm run start:all` | 一个进程同时跑 API 和本地队列，适合本地调试 |
+| 默认单进程 | `npm run start:server` | 一个进程同时跑 API 和本地队列，适合第一版上线 |
 | API-only | `npm run start:api` | 只处理 HTTP API，不消费生成任务 |
 | Worker-only | `npm run start:worker` | 不提供 HTTP，只扫描数据库并消费 queued 任务 |
-| Worker Service | `npm run start:worker-service` | 提供 `/api/tasks`、`/api/images`、`/api/videos`，也可消费队列 |
-| Asset Service | `npm run start:asset-service` | 提供素材列表、上传、读取和素材集合 |
+| Worker Service | `npm run start:worker-service` | 高级拆分服务，提供 `/api/tasks`、`/api/images`、`/api/videos` |
+| Asset Service | `npm run start:asset-service` | 高级拆分服务，提供素材列表、上传、读取和素材集合 |
 
 第一版建议这样用：
+
+```bash
+npm run start:server
+```
+
+需要拆分 worker-service 时，再这样用：
 
 ```bash
 npm run start:api

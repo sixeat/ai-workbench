@@ -12,6 +12,17 @@ type VideoContentItem =
   | { type: 'video_url'; video_url: { url: string }; role: 'reference_video' }
   | { type: 'audio_url'; audio_url: { url: string }; role: 'reference_audio' };
 
+function asRecord(value: unknown): Record<string, any> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return '';
+}
+
 function inferVideoMode(configMode: string, images: ImageAsset[], shotList: ShotList | null): VideoMode {
   if (configMode && configMode !== 'auto') return configMode as VideoMode;
   if (shotList) return 'shotlist-to-video';
@@ -134,22 +145,30 @@ export async function executeVideoGen(
       { apiKeyId: runtimeConfig?.apiKeyId, platformModelId: platformModelId || undefined, providerId }
     );
 
+    const backendTask = asRecord(response.task);
+    const backendOutput = asRecord(backendTask?.output);
+    const upstream = asRecord(backendOutput?.upstream) || asRecord(response.data?.upstream) || asRecord(response.data) || {};
+    const taskId = firstString(response.taskId, backendTask?.id, localTaskId);
+    const taskStatus = firstString(backendTask?.status, response.status, 'queued');
+    const upstreamTaskId = firstString(response.upstreamTaskId, response.data?.upstreamTaskId, upstream.taskId, upstream.id);
+    const upstreamStatus = firstString(response.upstreamStatus, upstream.status, upstream.rawStatus);
+
     const video: VideoAsset = {
       type: 'video',
-      id: response.taskId || localTaskId,
+      id: taskId,
       url: '',
       prompt,
       createdAt,
-      status: 'queued',
+      status: taskStatus as VideoAsset['status'],
     };
 
     const task = {
       id: video.id,
       type: 'videoTask',
-      status: 'queued',
+      status: taskStatus,
       mode,
-      providerId,
-      model,
+      providerId: firstString(backendTask?.providerId, providerId),
+      model: firstString(backendTask?.model, model),
       duration,
       aspectRatio,
       resolution,
@@ -159,7 +178,9 @@ export async function executeVideoGen(
       prompt,
       images,
       shotList,
-      upstream: response.data,
+      upstream,
+      upstreamTaskId,
+      upstreamStatus,
       warnings: response.warnings || [],
       createdAt,
     };
@@ -167,7 +188,7 @@ export async function executeVideoGen(
     return {
       video,
       task,
-      text: `已提交视频任务：${task.model}，可在任务历史查看上游返回。`,
+      text: `已提交视频任务：${task.model}，可在节点卡片或任务历史刷新状态。`,
     };
   } catch (error) {
     return {

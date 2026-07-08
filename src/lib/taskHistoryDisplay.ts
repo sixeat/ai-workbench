@@ -38,6 +38,12 @@ const LOG_EVENT_LABELS: Record<string, string> = {
   retry_created: '创建重试任务',
   created_from_retry: '来自重试',
   recovered_interrupted_task: '恢复中断任务',
+  upstream_text_submitted: '文本请求已提交',
+  upstream_text_response: '文本上游已响应',
+  upstream_image_submitted: '图片请求已提交',
+  upstream_image_response: '图片上游已响应',
+  upstream_video_request_submitted: '视频请求已提交',
+  upstream_video_response: '视频上游已响应',
   upstream_video_submitted: '视频任务已提交',
   upstream_video_completed: '视频任务已完成',
   upstream_video_failed: '视频任务失败',
@@ -81,6 +87,9 @@ const UPSTREAM_ERROR_HINTS: Record<string, string> = {
 
 const TASK_STATUS_SEARCH_LABELS: Record<ProxyTask['status'], string> = {
   queued: '排队中',
+  submitted: '已提交',
+  waiting_upstream: '等待上游',
+  processing: '生成中',
   running: '运行中',
   succeeded: '已完成',
   failed: '失败',
@@ -139,7 +148,7 @@ function taskErrorRetryHint(category: string, retryable?: boolean): string {
 }
 
 export function canCancelTask(status: ProxyTask['status']): boolean {
-  return status === 'queued' || status === 'running';
+  return status === 'queued' || status === 'submitted' || status === 'waiting_upstream' || status === 'processing' || status === 'running';
 }
 
 export function canRetryTask(status: ProxyTask['status']): boolean {
@@ -248,6 +257,29 @@ export function summarizeTaskError(error: unknown): TaskErrorSummary | null {
   const upstream = isRecord(error.upstream) ? error.upstream : {};
   const category = stringValue(error.upstreamCategory, upstream.category);
   const categoryLabel = category ? UPSTREAM_ERROR_LABELS[category] || category : '';
+  const rawCode = stringValue(error.code, error.upstreamCode, upstream.code);
+  const rawMessage = stringValue(error.message);
+  const isAbortError = rawCode === '20' || /abort/i.test(stringValue(error.name, error.message));
+  if (isAbortError && !category) {
+    return {
+      title: '本地等待被中断',
+      detail: stringValue(error.message) || '请求等待期间被本地中断。',
+      actionLabel: '核对上游记录',
+      retryable: true,
+      retryHint: '如果中转站已有使用记录，说明请求可能已到达上游。本地现在已改为生成请求不设倒计时，后续长耗时任务会继续等待上游响应。',
+      ...(rawCode ? { code: rawCode } : {}),
+    };
+  }
+  if (/generation failed/i.test(rawMessage) && !category) {
+    return {
+      title: '生成请求未拿到结果',
+      detail: rawMessage,
+      actionLabel: '核对上游记录',
+      retryable: true,
+      retryHint: '如果中转站已有使用记录，说明请求已经到达上游。当前版本已关闭本地倒计时和底层响应头超时，后续长耗时生成会继续等待上游响应。',
+      ...(rawCode ? { code: rawCode } : {}),
+    };
+  }
   const retryableValue = error.upstreamRetryable ?? upstream.retryable;
   const retryable = typeof retryableValue === 'boolean' ? retryableValue : undefined;
   const status = stringValue(error.upstreamStatus, upstream.status);

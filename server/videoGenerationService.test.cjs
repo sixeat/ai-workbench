@@ -114,6 +114,11 @@ test('video generation keeps local task running and finalizes it after upstream 
     assert.equal(completedTask.output.video.type, 'video');
     assert.equal(listTaskAssets(taskId).length, 1);
     assert.equal(listTaskAssets(taskId)[0].type, 'video');
+    const logs = listTaskLogs(taskId);
+    assert.equal(logs.some((log) => log.event === 'upstream_video_request_submitted'), true);
+    assert.equal(logs.some((log) => log.event === 'upstream_video_response'), true);
+    assert.equal(logs.some((log) => log.event === 'upstream_video_submitted'), true);
+    assert.equal(JSON.stringify(logs).includes('test-key'), false);
     const successLog = listTaskLogs(taskId).find((log) => log.event === 'upstream_video_succeeded');
     assert.equal(successLog.data.upstreamTaskId, 'ark-task-1');
     assert.equal(successLog.data.assetId, completedTask.output.video.id);
@@ -143,7 +148,7 @@ test('video task persists multimodal content so worker can resume from stored in
     joinUrl,
     publicAsset: (asset) => asset,
     proxyRequest: async (url, options) => {
-      requests.push({ url, body: options.body });
+      requests.push({ url, body: options.body, timeoutMs: options.timeoutMs });
       return {
         status: 200,
         data: { id: 'ark-resume-content-task', status: 'queued' },
@@ -180,6 +185,7 @@ test('video task persists multimodal content so worker can resume from stored in
   assert.deepEqual(submittedBody.content, content);
   assert.equal(submittedBody.generate_audio, true);
   assert.equal(submittedBody.duration, 11);
+  assert.equal(requests[0].timeoutMs, 0);
 });
 
 test('video task lookup normalizes upstream errors and marks the local task failed', async () => {

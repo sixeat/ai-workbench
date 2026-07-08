@@ -13,13 +13,13 @@ npm install
 npm run dev
 ```
 
-服务器部署前先选择模式：
+服务器默认用单进程 SaaS 模式：
 
 ```bash
 npm install
 cp .env.example .env
 npm run check:deploy
-npm run start:all
+npm run start:server
 ```
 
 正式服务器推荐前端静态托管、后端只提供 API。具体配置见 [部署模式清单](docs/deployment-modes.md)。
@@ -73,14 +73,14 @@ flowchart LR
 | 分镜生图 | 分镜拆解 -> 提示词优化 -> 图片生成 -> 预览 |
 | 多图生视频 | 多图输入 -> 视频生成 -> 预览 |
 
-## API Key 选择
+## API 模式选择
 
-| 类型 | 保存位置 | 适合场景 |
+| 类型 | 谁来配置 | 适合场景 |
 |---|---|---|
-| 本地 Key | 当前浏览器 | 你自己单机使用 |
-| 服务器 Key | 服务器 SQLite，加密保存 | 给朋友一起用 |
+| 平台提供 API | 管理员 | 统一计费、普通用户一键选模型 |
+| 我的 API | 当前账号 | 你自带第三方 Key，不走平台积分 |
 
-服务器部署时，建议使用“服务器 Key”。这样换浏览器、换电脑后配置仍然存在。
+管理员在 `/admin` 管理平台模型和服务器 Key。普通用户在左侧 `我的 API` 里保存自己的 Key。
 
 ## 运行节点
 
@@ -100,7 +100,7 @@ flowchart LR
 | 文档 | 用途 |
 |---|---|
 | [使用说明](docs/user-guide.md) | 给实际使用者看的完整操作说明 |
-| [部署模式](docs/deployment-modes.md) | 本地开发、单机服务器、API/Worker 分进程配置 |
+| [部署模式](docs/deployment-modes.md) | 本地开发、默认单机服务器、高级分进程配置 |
 | [服务器部署](docs/server-deploy.md) | 服务器部署、PM2、端口和故障排查 |
 | [前端静态托管](docs/frontend-static-hosting.md) | Nginx、Vercel、OSS/CDN 托管前端 |
 | [API 设计](docs/api-design-v2.md) | 后端 API 和数据结构设计 |

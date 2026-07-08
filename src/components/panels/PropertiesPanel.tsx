@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { AlertCircle, CheckCircle2, ChevronDown, ImagePlus, Loader2, Play, Settings, Trash2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ImagePlus, Loader2, Play, Settings, Trash2 } from 'lucide-react';
 import type { Node } from '@xyflow/react';
 import { cn } from '../../lib/utils';
 import { getNodeDefinition } from '../../data/nodeRegistry';
@@ -26,11 +26,13 @@ import {
   summarizeModelCapabilityUsage,
   validateNodeCapabilityUsage,
 } from '../../lib/modelCapabilities';
-import { uniqueNodeRunAssetIds } from '../../lib/nodeRunDisplay';
+import { formatNodeRunTaskStatus, shortNodeRunTaskId, uniqueNodeRunAssetIds } from '../../lib/nodeRunDisplay';
 import { useApiStore } from '../../stores/apiStore';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { platformModelSupportsNode, usePlatformModelStore } from '../../stores/platformModelStore';
 import { NODE_COLORS, type ConfigField, type NodeData, type NodeRunSummary, type NodeType } from '../../types/nodes';
+import { DarkSelect, type DarkSelectGroup } from '../ui/DarkSelect';
+import { PanelButton } from '../ui/PanelButton';
 
 const GENERATIVE_NODE_TYPES = new Set<NodeType>([
   'textModel',
@@ -166,106 +168,6 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
     <div className="space-y-2 rounded-lg border border-panel-border bg-canvas-bg/70 p-3">
       <h4 className="text-xs font-medium text-gray-300">{title}</h4>
       {children}
-    </div>
-  );
-}
-
-interface DarkSelectOption {
-  description?: string;
-  label: string;
-  value: string;
-}
-
-interface DarkSelectGroup {
-  label?: string;
-  options: DarkSelectOption[];
-}
-
-function flattenSelectGroups(groups: DarkSelectGroup[]): DarkSelectOption[] {
-  return groups.flatMap((group) => group.options);
-}
-
-function DarkSelect({
-  className,
-  emptyLabel = '暂无可选项',
-  groups,
-  onChange,
-  placeholder,
-  title,
-  value,
-}: {
-  className?: string;
-  emptyLabel?: string;
-  groups: DarkSelectGroup[];
-  onChange: (value: string) => void;
-  placeholder: string;
-  title?: string;
-  value: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const options = flattenSelectGroups(groups);
-  const selectedOption = options.find((option) => option.value === value);
-
-  return (
-    <div
-      className={cn('relative', className)}
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
-      }}
-    >
-      <button
-        type="button"
-        title={title}
-        onClick={() => setOpen((current) => !current)}
-        onKeyDown={(event) => {
-          if (event.key === 'Escape') setOpen(false);
-        }}
-        className={cn(
-          'flex w-full items-center gap-2 rounded-md border border-panel-border bg-canvas-bg px-2.5 py-1.5 text-left text-xs text-white transition-colors',
-          'hover:border-gray-600 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/10'
-        )}
-      >
-        <span className={cn('min-w-0 flex-1 truncate', !selectedOption && 'text-gray-500')}>
-          {selectedOption?.label || placeholder}
-        </span>
-        <ChevronDown className={cn('h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform', open && 'rotate-180')} />
-      </button>
-
-      {open && (
-        <div className="absolute left-0 right-0 top-full z-50 mt-1 overflow-hidden rounded-lg border border-panel-border bg-[#111821] shadow-2xl shadow-black/40">
-          {options.length === 0 ? (
-            <div className="px-3 py-2.5 text-[10px] leading-4 text-gray-500">{emptyLabel}</div>
-          ) : (
-            <div className="max-h-56 overflow-auto p-1.5">
-              {groups.map((group, groupIndex) => {
-                if (group.options.length === 0) return null;
-                return (
-                  <div key={`${group.label || 'group'}-${groupIndex}`} className={groupIndex > 0 ? 'mt-1.5 border-t border-panel-border pt-1.5' : ''}>
-                    {group.label && <div className="px-2 py-1 text-[9px] font-medium text-gray-500">{group.label}</div>}
-                    {group.options.map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        onClick={() => {
-                          onChange(option.value);
-                          setOpen(false);
-                        }}
-                        className={cn(
-                          'flex w-full flex-col rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/5',
-                          option.value === value && 'bg-accent/10 text-accent'
-                        )}
-                      >
-                        <span className="truncate text-[11px] text-current">{option.label}</span>
-                        {option.description && <span className="mt-0.5 truncate text-[9px] text-gray-500">{option.description}</span>}
-                      </button>
-                    ))}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -939,8 +841,14 @@ export function PropertiesPanel() {
               </span>
             </div>
             <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-              <Metric label="任务 ID" value={lastRun.taskId || '-'} title={lastRun.taskId} />
-              <Metric label="任务状态" value={lastRun.taskStatus || '-'} title={lastRun.taskStatus} />
+              <Metric label="任务 ID" value={shortNodeRunTaskId(lastRun.taskId)} title={lastRun.taskId} />
+              <Metric label="任务状态" value={formatNodeRunTaskStatus(lastRun.taskStatus)} title={lastRun.taskStatus} />
+              {lastRun.upstreamTaskId && (
+                <Metric label="上游任务" value={shortNodeRunTaskId(lastRun.upstreamTaskId)} title={lastRun.upstreamTaskId} />
+              )}
+              {lastRun.upstreamStatus && (
+                <Metric label="上游状态" value={formatNodeRunTaskStatus(lastRun.upstreamStatus)} title={lastRun.upstreamStatus} />
+              )}
               <Metric label="耗时" value={formatDuration(lastRun.durationMs)} />
               <Metric label="模型" value={lastRun.model || '-'} title={lastRun.model} />
               <Metric label="产物" value={lastRun.assetCount} />
@@ -1094,28 +1002,26 @@ export function PropertiesPanel() {
       </div>
 
       <PanelFooter>
-        <button
+        <PanelButton
           onClick={() => void executeSingleNode(selectedNode.id)}
           disabled={selectedNode.data.status === 'running'}
-          className={cn(
-            'flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-all',
-            selectedNode.data.status === 'running' ? 'cursor-not-allowed bg-gray-700 text-gray-500' : 'bg-accent text-white hover:bg-accent-hover'
-          )}
+          variant="primary"
+          size="md"
+          className="w-full"
         >
           <Play className="h-3.5 w-3.5" />
           重跑此节点
-        </button>
-        <button
+        </PanelButton>
+        <PanelButton
           onClick={() => void executeUntilNode(selectedNode.id)}
           disabled={selectedNode.data.status === 'running'}
-          className={cn(
-            'flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-xs font-medium transition-all',
-            selectedNode.data.status === 'running' ? 'cursor-not-allowed bg-gray-700 text-gray-500' : 'bg-emerald-600 text-white hover:bg-emerald-500'
-          )}
+          variant="primary"
+          size="md"
+          className="w-full border-emerald-500/45 bg-emerald-500/15 hover:border-emerald-400/70 hover:bg-emerald-500/25"
         >
           <Play className="h-3.5 w-3.5" />
           运行到此节点（复用已完成）
-        </button>
+        </PanelButton>
         <DangerButton onClick={() => removeNode(selectedNode.id)} icon={<Trash2 className="h-3.5 w-3.5" />}>
           删除节点
         </DangerButton>
@@ -1138,13 +1044,15 @@ function PanelFooter({ children }: { children: ReactNode }) {
 
 function DangerButton({ children, icon, onClick }: { children: ReactNode; icon: ReactNode; onClick: () => void }) {
   return (
-    <button
+    <PanelButton
       onClick={onClick}
-      className="flex w-full items-center justify-center gap-2 rounded-md px-3 py-2 text-xs text-red-400 transition-colors hover:bg-red-500/10"
+      variant="danger"
+      size="md"
+      className="w-full"
     >
       {icon}
       {children}
-    </button>
+    </PanelButton>
   );
 }
 

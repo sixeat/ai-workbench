@@ -1,3 +1,4 @@
+import { RefreshCw } from 'lucide-react';
 import { proxyAssetUrl } from '../../lib/apiProxy';
 import { isNodeRunImageAsset, summarizeNodeRunForDisplay } from '../../lib/nodeRunDisplay';
 import { cn } from '../../lib/utils';
@@ -21,6 +22,10 @@ interface NodeRunSummaryProps {
   lastRun?: NodeRunSummaryData;
   onOpenAsset?: (asset: NodeRunAssetSummary) => void;
   onAddAsset?: (asset: NodeRunAssetSummary) => void;
+  onRefreshTask?: (taskId: string) => void;
+  refreshingTaskId?: string;
+  taskRefreshNotice?: string;
+  taskRefreshError?: string;
   addingAssetId?: string;
   assetActionNotice?: string;
   assetActionError?: string;
@@ -39,27 +44,54 @@ function renderLastRun(
   lastRun?: NodeRunSummaryData,
   onOpenAsset?: (asset: NodeRunAssetSummary) => void,
   onAddAsset?: (asset: NodeRunAssetSummary) => void,
+  onRefreshTask?: (taskId: string) => void,
+  refreshingTaskId?: string,
+  taskRefreshNotice?: string,
+  taskRefreshError?: string,
   addingAssetId?: string,
   assetActionNotice?: string,
   assetActionError?: string
 ) {
   const summary = summarizeNodeRunForDisplay(lastRun);
   if (!summary || !lastRun) return null;
+  const canRefresh = Boolean(lastRun.taskId && onRefreshTask);
+  const isRefreshing = Boolean(lastRun.taskId && refreshingTaskId === lastRun.taskId);
 
   return (
     <div className="mb-2 rounded-lg border border-gray-700/40 bg-gray-950/30 px-2.5 py-2">
-      <div className="mb-1 flex items-center gap-1.5">
-        <span className="text-[9px] uppercase tracking-wide text-gray-500">最近运行</span>
-        <span className={cn('rounded-full px-1.5 py-0.5 text-[9px]', runStatusClass(lastRun.status))}>
-          {summary.statusLabel}
-        </span>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[9px] uppercase tracking-wide text-gray-500">最近运行</span>
+          <span className={cn('rounded-full px-1.5 py-0.5 text-[9px]', runStatusClass(lastRun.status))}>
+            {summary.statusLabel}
+          </span>
+        </div>
+        {canRefresh && (
+          <button
+            type="button"
+            disabled={isRefreshing}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (lastRun.taskId) onRefreshTask?.(lastRun.taskId);
+            }}
+            className="inline-flex h-6 items-center gap-1 rounded-md border border-gray-700 bg-gray-900 px-1.5 text-[9px] text-gray-300 transition-[border-color,color,transform] hover:border-accent hover:text-white active:scale-95 disabled:cursor-wait disabled:text-gray-500"
+            title="刷新任务状态"
+          >
+            <RefreshCw className={cn('h-3 w-3', isRefreshing && 'animate-spin')} />
+            {isRefreshing ? '刷新中' : '刷新'}
+          </button>
+        )}
       </div>
-      <div className="flex items-center gap-2 text-[10px] text-gray-400">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-gray-400">
         <span title={lastRun.taskId}>任务 {summary.taskLabel}</span>
         {lastRun.taskStatus && <span>{summary.taskStatusLabel}</span>}
+        {lastRun.upstreamTaskId && <span title={lastRun.upstreamTaskId}>上游 {summary.upstreamTaskLabel}</span>}
+        {lastRun.upstreamStatus && <span>{summary.upstreamStatusLabel}</span>}
         <span>{summary.durationLabel}</span>
         <span>{summary.assetLabel}</span>
       </div>
+      {taskRefreshNotice && <div className="mt-1 text-[9px] text-emerald-300">{taskRefreshNotice}</div>}
+      {taskRefreshError && <div className="mt-1 line-clamp-2 text-[9px] text-red-300">{taskRefreshError}</div>}
       {lastRun.error && <div className="mt-1 line-clamp-2 text-[10px] text-red-300">{lastRun.error}</div>}
       {summary.visibleAssets.length > 0 && (
         <div className="mt-2 flex gap-1.5">
@@ -122,11 +154,26 @@ export function NodeRunSummary({
   lastRun,
   onOpenAsset,
   onAddAsset,
+  onRefreshTask,
+  refreshingTaskId,
+  taskRefreshNotice,
+  taskRefreshError,
   addingAssetId,
   assetActionNotice,
   assetActionError,
 }: NodeRunSummaryProps) {
-  const lastRunContent = renderLastRun(lastRun, onOpenAsset, onAddAsset, addingAssetId, assetActionNotice, assetActionError);
+  const lastRunContent = renderLastRun(
+    lastRun,
+    onOpenAsset,
+    onAddAsset,
+    onRefreshTask,
+    refreshingTaskId,
+    taskRefreshNotice,
+    taskRefreshError,
+    addingAssetId,
+    assetActionNotice,
+    assetActionError
+  );
 
   if (type === 'imageGen') {
     return (

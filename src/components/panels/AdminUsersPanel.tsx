@@ -29,6 +29,8 @@ import {
 } from '../../lib/adminHealthDisplay';
 import { cn } from '../../lib/utils';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { DarkSelect } from '../ui/DarkSelect';
+import { PanelButton } from '../ui/PanelButton';
 import {
   buildAuditActorLabelMap,
   filterAuditLogs,
@@ -615,39 +617,41 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, variant = 'float
                       placeholder="搜索邮箱、昵称、用户 ID"
                       className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
                     />
-                    <select
+                    <DarkSelect
                       value={userFilters.role}
-                      onChange={(event) => setUserFilters((current) => ({ ...current, role: event.target.value }))}
-                      className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                    >
-                      <option value="">全部角色</option>
-                      <option value="user">普通用户</option>
-                      <option value="admin">管理员</option>
-                    </select>
-                    <select
+                      onChange={(value) => setUserFilters((current) => ({ ...current, role: value }))}
+                      options={[
+                        { label: '全部角色', value: '' },
+                        { label: '普通用户', value: 'user' },
+                        { label: '管理员', value: 'admin' },
+                      ]}
+                    />
+                    <DarkSelect
                       value={userFilters.status}
-                      onChange={(event) => setUserFilters((current) => ({ ...current, status: event.target.value }))}
-                      className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                    >
-                      <option value="">全部状态</option>
-                      <option value="enabled">已启用</option>
-                      <option value="disabled">已禁用</option>
-                    </select>
-                    <button
+                      onChange={(value) => setUserFilters((current) => ({ ...current, status: value }))}
+                      options={[
+                        { label: '全部状态', value: '' },
+                        { label: '已启用', value: 'enabled' },
+                        { label: '已禁用', value: 'disabled' },
+                      ]}
+                    />
+                    <PanelButton
                       onClick={() => setAppliedUserFilters(userFilters)}
-                      className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
+                      variant="primary"
+                      size="sm"
                     >
                       筛选
-                    </button>
-                    <button
+                    </PanelButton>
+                    <PanelButton
                       onClick={() => {
                         setUserFilters(emptyListFilters);
                         setAppliedUserFilters(emptyListFilters);
                       }}
-                      className="rounded-md border border-panel-border px-3 py-1.5 text-xs text-gray-300 hover:border-accent hover:text-accent"
+                      variant="secondary"
+                      size="sm"
                     >
                       重置
-                    </button>
+                    </PanelButton>
                   </div>
                   <div className="overflow-hidden rounded-lg border border-panel-border">
                     {users.length === 0 ? (
@@ -704,21 +708,18 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, variant = 'float
                         <Coins className="h-3.5 w-3.5 text-emerald-300" />
                         积分调整
                       </div>
-                      <label className="block space-y-1">
-                        <span className="text-[10px] text-gray-500">目标用户</span>
-                        <select
-                          value={selectedCreditUserId}
-                          onChange={(event) => setSelectedCreditUserId(event.target.value)}
-                          className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                        >
-                          <option value="">选择用户</option>
-                          {users.map((user) => (
-                            <option key={user.id} value={user.id}>
-                              {user.email || user.username || user.id}（{user.creditAccount?.balance ?? 0} 积分）
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                      <DarkSelect
+                        label="目标用户"
+                        value={selectedCreditUserId}
+                        onChange={setSelectedCreditUserId}
+                        options={[
+                          { label: '选择用户', value: '' },
+                          ...users.map((user) => ({
+                            label: `${user.email || user.username || user.id}（${user.creditAccount?.balance ?? 0} 积分）`,
+                            value: user.id,
+                          })),
+                        ]}
+                      />
                       {selectedCreditUser && (
                         <div className="grid grid-cols-3 gap-2 text-[10px]">
                           <CreditMetric label="余额" value={selectedCreditUser.creditAccount?.balance ?? 0} />
@@ -771,44 +772,44 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, variant = 'float
                       </span>
                     </div>
                     <div className="mb-3 grid gap-2 rounded-lg border border-panel-border bg-canvas-bg/40 p-2 md:grid-cols-[1fr_140px_1fr_auto]">
-                      <select
+                      <DarkSelect
                         value={selectedCreditUserId}
-                        onChange={(event) => setSelectedCreditUserId(event.target.value)}
-                        className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                      >
-                        <option value="">全部用户</option>
-                        {users.map((user) => (
-                          <option key={user.id} value={user.id}>
-                            {user.email || user.username || user.id}
-                          </option>
-                        ))}
-                      </select>
-                      <select
+                        onChange={setSelectedCreditUserId}
+                        options={[
+                          { label: '全部用户', value: '' },
+                          ...users.map((user) => ({
+                            label: user.email || user.username || user.id,
+                            value: user.id,
+                          })),
+                        ]}
+                      />
+                      <DarkSelect
                         value={creditTypeFilter}
-                        onChange={(event) => setCreditTypeFilter(event.target.value)}
-                        className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                      >
-                        <option value="">全部类型</option>
-                        <option value="debit">扣费</option>
-                        <option value="refund">退款</option>
-                        <option value="admin_adjustment">管理员调整</option>
-                        <option value="grant">充值</option>
-                        <option value="free_usage">用户 Key 免费</option>
-                      </select>
+                        onChange={setCreditTypeFilter}
+                        options={[
+                          { label: '全部类型', value: '' },
+                          { label: '扣费', value: 'debit' },
+                          { label: '退款', value: 'refund' },
+                          { label: '管理员调整', value: 'admin_adjustment' },
+                          { label: '充值', value: 'grant' },
+                          { label: '用户 Key 免费', value: 'free_usage' },
+                        ]}
+                      />
                       <input
                         value={creditTaskFilter}
                         onChange={(event) => setCreditTaskFilter(event.target.value)}
                         placeholder="按任务 ID 筛选"
                         className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
                       />
-                      <button
+                      <PanelButton
                         onClick={() => void loadCreditTransactions()}
                         disabled={creditLoading}
-                        className="inline-flex items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
+                        variant="primary"
+                        size="sm"
                       >
                         <RefreshCw className={cn('h-3.5 w-3.5', creditLoading && 'animate-spin')} />
                         刷新
-                      </button>
+                      </PanelButton>
                     </div>
                     <div className="overflow-hidden rounded-lg border border-panel-border">
                       {creditLoading && creditTransactions.length === 0 ? (
@@ -880,42 +881,44 @@ export function AdminUsersPanel({ isOpen, onClose, currentUser, variant = 'float
                       placeholder="搜索备注、角色、邀请 ID"
                       className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white placeholder-gray-600 focus:border-accent focus:outline-none"
                     />
-                    <select
+                    <DarkSelect
                       value={invitationFilters.role}
-                      onChange={(event) => setInvitationFilters((current) => ({ ...current, role: event.target.value }))}
-                      className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                    >
-                      <option value="">全部角色</option>
-                      <option value="user">普通用户</option>
-                      <option value="admin">管理员</option>
-                    </select>
-                    <select
+                      onChange={(value) => setInvitationFilters((current) => ({ ...current, role: value }))}
+                      options={[
+                        { label: '全部角色', value: '' },
+                        { label: '普通用户', value: 'user' },
+                        { label: '管理员', value: 'admin' },
+                      ]}
+                    />
+                    <DarkSelect
                       value={invitationFilters.status}
-                      onChange={(event) => setInvitationFilters((current) => ({ ...current, status: event.target.value }))}
-                      className="rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-                    >
-                      <option value="">全部状态</option>
-                      <option value="active">可用</option>
-                      <option value="inactive">不可用</option>
-                      <option value="expired">已过期</option>
-                      <option value="used">已用完</option>
-                      <option value="disabled">已禁用</option>
-                    </select>
-                    <button
+                      onChange={(value) => setInvitationFilters((current) => ({ ...current, status: value }))}
+                      options={[
+                        { label: '全部状态', value: '' },
+                        { label: '可用', value: 'active' },
+                        { label: '不可用', value: 'inactive' },
+                        { label: '已过期', value: 'expired' },
+                        { label: '已用完', value: 'used' },
+                        { label: '已禁用', value: 'disabled' },
+                      ]}
+                    />
+                    <PanelButton
                       onClick={() => setAppliedInvitationFilters(invitationFilters)}
-                      className="rounded-md bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-hover"
+                      variant="primary"
+                      size="sm"
                     >
                       筛选
-                    </button>
-                    <button
+                    </PanelButton>
+                    <PanelButton
                       onClick={() => {
                         setInvitationFilters(emptyListFilters);
                         setAppliedInvitationFilters(emptyListFilters);
                       }}
-                      className="rounded-md border border-panel-border px-3 py-1.5 text-xs text-gray-300 hover:border-accent hover:text-accent"
+                      variant="secondary"
+                      size="sm"
                     >
                       重置
-                    </button>
+                    </PanelButton>
                   </div>
                   <div className="overflow-hidden rounded-lg border border-panel-border">
                     {invitations.length === 0 ? (
@@ -1162,48 +1165,37 @@ function PasswordResetDialog({
   const label = user.email || user.username || user.id;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/60 px-4">
-      <section className="w-full max-w-md rounded-2xl border border-panel-border bg-[#11161c] p-4 shadow-2xl">
-        <div className="mb-3">
-          <div className="text-sm font-semibold text-white">重置用户密码</div>
-          <div className="mt-1 text-xs leading-5 text-gray-500">目标用户：{label}</div>
-        </div>
-        <div className="space-y-3">
-          <Input
-            label="新密码"
-            type="password"
-            value={password}
-            onChange={(value) => onChange({ password: value })}
-            placeholder="至少 8 位"
-          />
-          <Input
-            label="再次输入新密码"
-            type="password"
-            value={confirmation}
-            onChange={(value) => onChange({ confirmation: value })}
-            placeholder="再次确认，避免误改"
-          />
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-gray-500 hover:text-white"
-          >
-            取消
-          </button>
-          <button
-            type="button"
-            onClick={onConfirm}
-            disabled={isSaving || !password || !confirmation}
-            className="inline-flex items-center gap-1.5 rounded-md bg-red-600 px-3 py-2 text-xs font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-            确认重置
-          </button>
-        </div>
-      </section>
-    </div>
+    <FloatingWindow className="z-[80]" contentClassName="w-full max-w-md flex-col p-4">
+      <div className="mb-3">
+        <div className="text-sm font-semibold text-white">重置用户密码</div>
+        <div className="mt-1 text-xs leading-5 text-gray-500">目标用户：{label}</div>
+      </div>
+      <div className="space-y-3">
+        <Input
+          label="新密码"
+          type="password"
+          value={password}
+          onChange={(value) => onChange({ password: value })}
+          placeholder="至少 8 位"
+        />
+        <Input
+          label="再次输入新密码"
+          type="password"
+          value={confirmation}
+          onChange={(value) => onChange({ confirmation: value })}
+          placeholder="再次确认，避免误改"
+        />
+      </div>
+      <div className="mt-4 flex justify-end gap-2">
+        <PanelButton type="button" onClick={onCancel} variant="secondary" size="sm">
+          取消
+        </PanelButton>
+        <PanelButton type="button" onClick={onConfirm} disabled={isSaving || !password || !confirmation} variant="danger" size="sm">
+          {isSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          确认重置
+        </PanelButton>
+      </div>
+    </FloatingWindow>
   );
 }
 
@@ -1390,43 +1382,39 @@ function Select({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="block space-y-1">
-      <span className="text-[10px] text-gray-500">{label}</span>
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
-      >
-        {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </select>
-    </label>
+    <DarkSelect
+      label={label}
+      value={value}
+      options={options}
+      onChange={onChange}
+    />
   );
 }
 
 function PrimaryButton({ children, onClick, disabled }: { children: React.ReactNode; onClick: () => void; disabled?: boolean }) {
   return (
-    <button
+    <PanelButton
       onClick={onClick}
       disabled={disabled}
-      className="flex w-full items-center justify-center gap-2 rounded-md border border-accent/45 bg-accent/15 px-3 py-2 text-xs font-medium text-white shadow-sm shadow-black/20 transition-colors hover:border-accent/70 hover:bg-accent/25 disabled:cursor-not-allowed disabled:border-panel-border disabled:bg-canvas-bg disabled:text-gray-500 disabled:opacity-70"
+      variant="primary"
+      size="md"
+      className="w-full"
     >
       {children}
-    </button>
+    </PanelButton>
   );
 }
 
 function SmallButton({ children, onClick, disabled, danger }: { children: React.ReactNode; onClick: () => void; disabled?: boolean; danger?: boolean }) {
   return (
-    <button
+    <PanelButton
       onClick={onClick}
       disabled={disabled}
-      className={cn(
-        'rounded px-2 py-1 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-40',
-        danger ? 'text-red-300 hover:bg-red-500/10' : 'text-gray-300 hover:bg-gray-700/60'
-      )}
+      variant={danger ? 'danger' : 'ghost'}
+      size="xs"
     >
       {children}
-    </button>
+    </PanelButton>
   );
 }
 

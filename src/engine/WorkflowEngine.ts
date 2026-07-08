@@ -261,7 +261,7 @@ function looksLikeTask(value: Record<string, unknown>): boolean {
       value.output ||
       value.upstream ||
       value.type === 'videoTask' ||
-      ['queued', 'running', 'succeeded', 'failed', 'cancelled'].includes(status)
+      ['queued', 'submitted', 'waiting_upstream', 'processing', 'running', 'succeeded', 'failed', 'cancelled'].includes(status)
     )
   );
 }
@@ -276,6 +276,39 @@ function collectTaskRecords(value: unknown, tasks: Array<Record<string, unknown>
   if (looksLikeTask(value)) tasks.push(value);
   for (const item of Object.values(value)) collectTaskRecords(item, tasks);
   return tasks;
+}
+
+const PENDING_TASK_STATUSES = new Set(['queued', 'submitted', 'waiting_upstream', 'processing', 'running']);
+
+function isPendingTask(task: Record<string, unknown>): boolean {
+  return PENDING_TASK_STATUSES.has(String(task.status || '').toLowerCase());
+}
+
+function hasPendingTask(outputs: NodeOutputs): boolean {
+  return collectTaskRecords(outputs).some(isPendingTask);
+}
+
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return undefined;
+}
+
+function taskNestedRecord(task: Record<string, unknown>, key: string): Record<string, unknown> | null {
+  const value = task[key];
+  return isObjectRecord(value) ? value : null;
+}
+
+function taskOutputRecord(task: Record<string, unknown>): Record<string, unknown> | null {
+  return taskNestedRecord(task, 'output');
+}
+
+function taskUpstreamRecord(task: Record<string, unknown>): Record<string, unknown> | null {
+  const direct = taskNestedRecord(task, 'upstream');
+  if (direct) return direct;
+  const output = taskOutputRecord(task);
+  return output ? taskNestedRecord(output, 'upstream') : null;
 }
 
 function addTaskId(ids: Set<string>, value: unknown) {
@@ -321,12 +354,15 @@ function summarizeNodeRun(
   const taskIds = [...new Set(tasks.map((task) => String(task.id)).filter(Boolean))];
   const assets = uniqueRunAssets(collectRunAssets(outputs));
   const firstTask = tasks[0];
+  const upstream = firstTask ? taskUpstreamRecord(firstTask) : null;
 
   return {
     status,
     taskId: taskIds[0],
     taskIds,
     taskStatus: typeof firstTask?.status === 'string' ? firstTask.status : undefined,
+    upstreamTaskId: firstString(firstTask?.upstreamTaskId, upstream?.taskId, upstream?.id),
+    upstreamStatus: firstString(firstTask?.upstreamStatus, upstream?.status, upstream?.rawStatus),
     model: typeof firstTask?.model === 'string' ? firstTask.model : typeof node.data.config.model === 'string' ? node.data.config.model : undefined,
     providerId: typeof firstTask?.providerId === 'string' ? firstTask.providerId : undefined,
     durationMs,
@@ -510,8 +546,10 @@ async function* executeNodeInContext(
   const outputs = await runNodeWithInputs(node, inputs, context);
   const durationMs = Date.now() - startTime;
   const hasError = Boolean(outputs.error);
+  const hasPendingOutputTask = !hasError && hasPendingTask(outputs);
+  const runStatus: NodeRunSummary['status'] = hasError ? 'error' : hasPendingOutputTask ? 'running' : 'completed';
   const nextData: Partial<NodeData> = {
-    status: hasError ? 'error' : 'completed',
+    status: hasError ? 'error' : hasPendingOutputTask ? 'running' : 'completed',
     inputs,
     outputs,
     error: hasError ? String(outputs.error) : undefined,
@@ -521,7 +559,7 @@ async function* executeNodeInContext(
       node,
       outputs,
       durationMs,
-      hasError ? 'error' : 'completed',
+      runStatus,
       hasError ? String(outputs.error) : undefined
     ),
   };
@@ -534,8 +572,10 @@ async function* executeNodeInContext(
         node,
         hasError
           ? `节点执行失败：${node.data.label} - ${outputs.error}`
+          : hasPendingOutputTask
+            ? `节点任务已提交，等待上游完成：${node.data.label}`
           : `节点执行完成：${node.data.label}`,
-        hasError ? 'error' : 'success'
+        hasError ? 'error' : hasPendingOutputTask ? 'info' : 'success'
       ),
     ],
   };

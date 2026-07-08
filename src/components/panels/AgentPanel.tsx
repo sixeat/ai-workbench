@@ -17,6 +17,7 @@ import {
 import type { Edge } from '@xyflow/react';
 import { cn } from '../../lib/utils';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { PanelButton } from '../ui/PanelButton';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { generateId } from '../../lib/utils';
 import type { NodeType } from '../../types/nodes';
@@ -505,13 +506,15 @@ export function AgentPanel({ isOpen, onClose }: AgentPanelProps) {
                 </button>
               </div>}
             </div>
-            <button
+            <PanelButton
               onClick={handleSubmit}
               disabled={!input.trim() || isProcessing || desktopSending || (mode === 'desktop' && (!selectedDesktopAgent || desktopLoading))}
-              className={cn('self-end rounded-lg px-3 py-2 transition-all', input.trim() && !isProcessing && !desktopSending && (mode === 'workflow' || (selectedDesktopAgent && !desktopLoading)) ? 'bg-accent text-white hover:bg-accent-hover' : 'cursor-not-allowed bg-gray-700 text-gray-500')}
+              variant={input.trim() && !isProcessing && !desktopSending && (mode === 'workflow' || (selectedDesktopAgent && !desktopLoading)) ? 'primary' : 'ghost'}
+              size="icon"
+              className="self-end h-[38px] w-[42px] rounded-lg"
             >
               <Send className="h-4 w-4" />
-            </button>
+            </PanelButton>
           </div>
         </div>
     </FloatingWindow>

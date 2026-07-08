@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Boxes, CheckCircle2, KeyRound, LayoutPanelLeft, Loader2, LockKeyhole, Mail, RefreshCw, ShieldCheck, SlidersHorizontal, UserPlus, Workflow, Zap } from 'lucide-react';
+import { AlertCircle, Boxes, CheckCircle2, KeyRound, Loader2, LockKeyhole, Mail, RefreshCw, ShieldCheck, SlidersHorizontal, UserPlus, Workflow, Zap } from 'lucide-react';
 import { FlowCanvas } from './components/canvas/FlowCanvas';
 import { Header } from './components/layout/Header';
 import { Sidebar } from './components/layout/Sidebar';
@@ -818,6 +818,7 @@ function App() {
     <main className="workbench-shell text-gray-100">
       <WorkbenchRail
         onOpenApiManager={() => openApiManager('server')}
+        onOpenAccountSecurity={() => setIsAccountSecurityOpen(true)}
         onOpenAssetLibrary={() => setIsAssetLibraryOpen(true)}
         onOpenWorkflowManager={() => setIsWorkflowManagerOpen(true)}
       />
@@ -920,10 +921,12 @@ function App() {
 export default App;
 
 function WorkbenchRail({
+  onOpenAccountSecurity,
   onOpenApiManager,
   onOpenAssetLibrary,
   onOpenWorkflowManager,
 }: {
+  onOpenAccountSecurity: () => void;
   onOpenApiManager: () => void;
   onOpenAssetLibrary: () => void;
   onOpenWorkflowManager: () => void;
@@ -936,9 +939,6 @@ function WorkbenchRail({
       <button className="rail-button active" type="button" title="工作流库" onClick={onOpenWorkflowManager}>
         <Workflow className="h-5 w-5" />
       </button>
-      <button className="rail-button" type="button" title="画布">
-        <LayoutPanelLeft className="h-5 w-5" />
-      </button>
       <button className="rail-button" type="button" title="素材库" onClick={onOpenAssetLibrary}>
         <Boxes className="h-5 w-5" />
       </button>
@@ -946,7 +946,7 @@ function WorkbenchRail({
         <KeyRound className="h-5 w-5" />
       </button>
       <div className="rail-spacer" />
-      <button className="rail-button" type="button" title="设置">
+      <button className="rail-button" type="button" title="账号安全" onClick={onOpenAccountSecurity}>
         <SlidersHorizontal className="h-5 w-5" />
       </button>
     </aside>

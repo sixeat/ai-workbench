@@ -4,7 +4,7 @@
 
 ## 5 分钟版
 
-如果你还没决定用哪种方式部署，先看 [部署模式清单](./deployment-modes.md)。它把本地开发、单机服务器、API/Worker 分进程三种模式分开说明。
+如果你还没决定用哪种方式部署，先看 [部署模式清单](./deployment-modes.md)。默认先用单机服务器模式，等任务量上来后再考虑 API/Worker 分进程。
 
 先把后端作为 API 服务跑起来：
 
@@ -53,6 +53,7 @@ WORKBENCH_REQUIRE_INVITATION_CODE=false
 
 WORKBENCH_TEXT_QUEUE_CONCURRENCY=2
 WORKBENCH_GENERATION_QUEUE_CONCURRENCY=2
+WORKBENCH_GENERATION_FETCH_TIMEOUT_MS=0
 
 WORKBENCH_ADMIN_TOKEN=换成一段管理员专用随机字符串
 WORKBENCH_KEY_SECRET=换成一段足够长的随机字符串
@@ -222,17 +223,24 @@ WORKBENCH_REQUIRE_INVITATION_CODE=false
 WORKBENCH_TEXT_QUEUE_CONCURRENCY=2
 WORKBENCH_GENERATION_QUEUE_CONCURRENCY=2
 WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS=1000
+WORKBENCH_GENERATION_FETCH_TIMEOUT_MS=0
 ```
+
+文本、图片和视频生成经常超过 60 秒。`WORKBENCH_GENERATION_FETCH_TIMEOUT_MS=0` 表示生成请求已经到达上游后，本地不再倒计时截断。普通接口仍使用较短的 `WORKBENCH_FETCH_TIMEOUT_MS`。只有你明确想给生成请求设置本地截止时间时，才把它改成正数毫秒。
+
+长视频不要让一个 HTTP 请求挂一天。后端会先把视频任务提交到上游，保存上游任务 ID，然后在任务历史里继续查询状态。视频跨小时或跨天时，用户可以稍后回到任务历史里刷新结果。
 
 启动方式：
 
 | 命令 | 作用 | 适合场景 |
 | --- | --- | --- |
-| `npm run start:api` | 只启动 HTTP API，不消费生成任务 | API 和 worker 分进程部署 |
-| `npm run start:worker` | 不启动 HTTP，只消费 `queued` 任务 | 后台 worker 进程 |
-| `npm run start:all` | HTTP API 和本地 worker 同进程 | 本地调试或小型单机部署 |
+| `npm run start:server` | 部署检查通过后，启动 HTTP API 和本地 worker | 默认上线方式 |
+| `npm start` | 直接启动 HTTP API 和本地 worker | 已确认配置正确后的常驻进程 |
+| `npm run start:api` | 只启动 HTTP API，不消费生成任务 | 高级分进程部署 |
+| `npm run start:worker` | 不启动 HTTP，只消费 `queued` 任务 | 高级分进程部署 |
+| `npm run start:all` | 兼容旧命令，等同于单进程启动 | 本地调试或旧脚本兼容 |
 
-分进程部署时，API 和 worker 必须连接同一个 SQLite 数据库和同一个 `outputs` 目录。API 创建任务后立即返回 `taskId`，worker 会按 `WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS` 扫描数据库，发现 `queued` 任务后继续执行。
+默认不需要分进程。分进程部署时，API 和 worker 必须连接同一个 SQLite 数据库和同一个 `outputs` 目录。API 创建任务后立即返回 `taskId`，worker 会按 `WORKBENCH_TASK_QUEUE_POLL_INTERVAL_MS` 扫描数据库，发现 `queued` 任务后继续执行。
 
 代码边界上，`server/api.cjs` 只负责关闭本进程 worker 并启动 HTTP API。`server/worker.cjs` 不加载 Express app，也不依赖 routes。这个规则由 `server/processBoundary.test.cjs` 检查。
 

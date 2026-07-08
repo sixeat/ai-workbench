@@ -67,6 +67,7 @@ function apiUrl(path: string): string {
 let accessToken = '';
 let adminToken = '';
 const DEFAULT_AUTH_FETCH_TIMEOUT_MS = 60_000;
+const DEFAULT_GENERATION_TASK_TIMEOUT_MS = 1_800_000;
 
 function getAccessToken(): string {
   return accessToken;
@@ -153,7 +154,7 @@ export interface ProxyTask {
   nodeType?: string;
   providerId?: string;
   model?: string;
-  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  status: 'queued' | 'submitted' | 'waiting_upstream' | 'processing' | 'running' | 'succeeded' | 'failed' | 'cancelled';
   creditCost?: number;
   creditStatus?: 'none' | 'free' | 'charged' | 'refunded' | string;
   creditKeyScope?: 'user_key' | 'server_key' | string;
@@ -1082,7 +1083,7 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-async function waitForTaskResult(taskId: string, timeoutMs = 300_000): Promise<ProxyTask> {
+async function waitForTaskResult(taskId: string, timeoutMs = DEFAULT_GENERATION_TASK_TIMEOUT_MS): Promise<ProxyTask> {
   const startedAt = Date.now();
 
   while (Date.now() - startedAt < timeoutMs) {
@@ -1094,7 +1095,7 @@ async function waitForTaskResult(taskId: string, timeoutMs = 300_000): Promise<P
     await delay(1200);
   }
 
-  throw new Error('等待生成任务结果超时。');
+  throw new Error('等待生成任务结果超时。图片可能仍在后端任务历史里继续生成，可以稍后在任务历史中查看或重试。');
 }
 
 export async function proxyRetryTask(taskId: string): Promise<{ task: ProxyTask }> {

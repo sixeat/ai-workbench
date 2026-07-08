@@ -10,6 +10,7 @@ import {
 import { formatSessionDate, formatSessionDevice, formatSessionIp, sortSessionsForDisplay } from '../../lib/sessionDisplay';
 import { cn } from '../../lib/utils';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { PanelButton } from '../ui/PanelButton';
 
 interface AccountSecurityPanelProps {
   isOpen: boolean;
@@ -121,22 +122,25 @@ export function AccountSecurityPanel({ isOpen, currentUser, onClose, onSessionIn
         </div>
 
         <div className="flex items-center gap-2 border-b border-panel-border px-4 py-3">
-          <button
+          <PanelButton
             onClick={() => void loadSessions()}
             disabled={loading}
-            className="flex items-center gap-1.5 rounded-lg border border-panel-border px-3 py-1.5 text-xs text-gray-300 transition-colors hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-50"
+            variant="secondary"
+            size="sm"
           >
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
             刷新设备
-          </button>
-          <button
+          </PanelButton>
+          <PanelButton
             onClick={() => void handleLogoutAll()}
             disabled={loggingOutAll || sessions.length === 0}
-            className="ml-auto flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+            variant="danger"
+            size="sm"
+            className="ml-auto"
           >
             {loggingOutAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogOut className="h-3.5 w-3.5" />}
             退出所有设备
-          </button>
+          </PanelButton>
         </div>
 
         {error && (
@@ -208,13 +212,14 @@ function SessionCard({
             </div>
           )}
         </div>
-        <button
+        <PanelButton
           onClick={onLogout}
           disabled={isLoggingOut}
-          className="shrink-0 rounded-lg border border-panel-border px-2 py-1 text-[10px] text-gray-300 transition-colors hover:border-red-400 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-50"
+          variant="danger"
+          size="xs"
         >
           {isLoggingOut ? '退出中' : session.isCurrent ? '退出当前' : '退出设备'}
-        </button>
+        </PanelButton>
       </div>
 
       <div className="mt-3 grid gap-2 text-[10px] text-gray-500 sm:grid-cols-2">

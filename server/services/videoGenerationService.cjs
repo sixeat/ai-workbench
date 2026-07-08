@@ -15,6 +15,7 @@ const {
 } = require('./assetQuotaService.cjs');
 const {
   addCredentialFallbackLog,
+  credentialAttemptLogData,
   credentialAttempts,
   shouldFallbackAfterUpstreamResult,
 } = require('./credentialFallbackService.cjs');
@@ -24,6 +25,8 @@ const { getVideoProviderAdapter } = require('./videoProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
 const { assetRepository: defaultAssetRepository } = require('../repositories/assetRepository.cjs');
 const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
+
+const GENERATION_FETCH_TIMEOUT_MS = Number(process.env.WORKBENCH_GENERATION_FETCH_TIMEOUT_MS || 0);
 
 function createVideoTask(userId, body, status = 'queued', taskRepository = defaultTaskRepository) {
   return taskRepository.createTask({
@@ -260,10 +263,31 @@ function createVideoGenerationService({
           req: workerReq,
           apiKey,
         });
+        taskRepository.addTaskLog(activeTask.id, {
+          event: 'upstream_video_request_submitted',
+          message: 'Video request submitted to upstream provider.',
+          data: {
+            ...credentialAttemptLogData(credentials, attemptIndex),
+            providerId,
+            model: arkBody.model,
+          },
+        });
         const result = await proxyRequest(joinUrl(baseUrl, request.endpoint), {
           method: 'POST',
           headers: request.headers,
           body: request.body,
+          timeoutMs: GENERATION_FETCH_TIMEOUT_MS,
+        });
+        taskRepository.addTaskLog(activeTask.id, {
+          event: 'upstream_video_response',
+          message: `Video upstream responded with HTTP ${result.status}.`,
+          data: {
+            ...credentialAttemptLogData(credentials, attemptIndex),
+            upstreamStatus: result.status,
+            upstreamStatusText: result.statusText || '',
+            providerId,
+            model: arkBody.model,
+          },
         });
 
         if (result.status >= 400) {

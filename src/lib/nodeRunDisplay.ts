@@ -23,6 +23,9 @@ export function shortNodeRunTaskId(taskId?: string): string {
 export function formatNodeRunTaskStatus(status?: string): string {
   const labels: Record<string, string> = {
     queued: '排队中',
+    submitted: '已提交',
+    waiting_upstream: '等待上游',
+    processing: '生成中',
     running: '运行中',
     succeeded: '已成功',
     failed: '已失败',
@@ -52,9 +55,11 @@ export function uniqueNodeRunAssetIds(assets: readonly NodeRunAssetSummary[]): s
 export function summarizeNodeRunForDisplay(lastRun?: NodeRunSummary): {
   statusLabel: string;
   taskLabel: string;
+  upstreamTaskLabel: string;
   durationLabel: string;
   assetLabel: string;
   taskStatusLabel: string;
+  upstreamStatusLabel: string;
   visibleAssets: NodeRunAssetSummary[];
   overflowAssetCount: number;
 } | null {
@@ -66,7 +71,9 @@ export function summarizeNodeRunForDisplay(lastRun?: NodeRunSummary): {
   return {
     statusLabel: formatNodeRunStatus(lastRun.status),
     taskLabel: shortNodeRunTaskId(lastRun.taskId),
+    upstreamTaskLabel: shortNodeRunTaskId(lastRun.upstreamTaskId),
     taskStatusLabel: formatNodeRunTaskStatus(lastRun.taskStatus),
+    upstreamStatusLabel: formatNodeRunTaskStatus(lastRun.upstreamStatus),
     durationLabel: formatNodeRunDuration(lastRun.durationMs),
     assetLabel: assetCount > 0 ? `${assetCount} 个产物` : '无产物',
     visibleAssets,

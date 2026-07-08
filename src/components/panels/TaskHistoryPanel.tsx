@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileVideo, FolderOpen, ImagePlus, Plus, RefreshCw, RotateCcw, Search, Square, X } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileVideo, FolderOpen, ImagePlus, Plus, RefreshCw, RotateCcw, Search, Square, X } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { DarkSelect } from '../ui/DarkSelect';
 import {
   proxyAddAssetToCollection,
   proxyAddAssetsToCollection,
@@ -50,6 +51,9 @@ const COLLECTION_PAGE_SIZE = 80;
 
 const STATUS_LABEL: Record<ProxyTask['status'], string> = {
   queued: '排队中',
+  submitted: '已提交',
+  waiting_upstream: '等待上游',
+  processing: '生成中',
   running: '运行中',
   succeeded: '已完成',
   failed: '失败',
@@ -59,6 +63,9 @@ const STATUS_LABEL: Record<ProxyTask['status'], string> = {
 function statusClass(status: ProxyTask['status']): string {
   const map: Record<ProxyTask['status'], string> = {
     queued: 'bg-gray-500/15 text-gray-300',
+    submitted: 'bg-sky-500/15 text-sky-300',
+    waiting_upstream: 'bg-sky-500/15 text-sky-300',
+    processing: 'bg-blue-500/15 text-blue-300',
     running: 'bg-blue-500/15 text-blue-300',
     succeeded: 'bg-emerald-500/15 text-emerald-300',
     failed: 'bg-red-500/15 text-red-300',
@@ -74,6 +81,17 @@ function compact(value: unknown): string {
   return JSON.stringify(value, null, 2);
 }
 
+function taskUpstreamTaskId(task: ProxyTask): string {
+  const output = task.output && typeof task.output === 'object' && !Array.isArray(task.output)
+    ? task.output as Record<string, any>
+    : {};
+  const upstream = output.upstream && typeof output.upstream === 'object' && !Array.isArray(output.upstream)
+    ? output.upstream as Record<string, any>
+    : {};
+  const value = upstream.taskId || upstream.id;
+  return typeof value === 'string' ? value : '';
+}
+
 function isImageAsset(asset: ProxyAsset): boolean {
   return asset.type === 'image' || /\.(png|jpe?g|webp|gif|avif)$/i.test(asset.url || asset.fileName || '');
 }
@@ -82,6 +100,52 @@ function formatDuration(value: number | null): string {
   if (value == null) return '';
   if (value < 1000) return `${value}ms`;
   return `${(value / 1000).toFixed(1)}s`;
+}
+
+function shortTaskId(taskId: string): string {
+  return taskId.length > 10 ? `${taskId.slice(0, 8)}...` : taskId;
+}
+
+function taskTypeLabel(task: ProxyTask): string {
+  const type = task.nodeType || task.kind;
+  if (type === 'text') return '文本';
+  if (type === 'image') return '图片';
+  if (type === 'video') return '视频';
+  return type || '任务';
+}
+
+function recordValue(value: unknown): Record<string, any> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function taskRouteLabel(task: ProxyTask): string {
+  const input = recordValue(task.input);
+  if (input.platformModelId) return '平台模型';
+  if (input.apiKeyId) return '自定义 Key';
+  if (input.baseUrl) return '直连接口';
+  return task.creditKeyScope === 'server_key' ? '平台模型' : '-';
+}
+
+function taskPromptPreview(task: ProxyTask): string {
+  const input = recordValue(task.input);
+  if (typeof input.prompt === 'string') return input.prompt;
+  if (Array.isArray(input.messages)) {
+    const last = recordValue(input.messages[input.messages.length - 1]);
+    if (typeof last.content === 'string') return last.content;
+  }
+  if (Array.isArray(input.content)) {
+    const textItem = input.content.find((item: unknown) => recordValue(item).type === 'text');
+    const text = recordValue(textItem).text;
+    if (typeof text === 'string') return text;
+  }
+  return '';
+}
+
+function taskUpstreamStatus(task: ProxyTask): string {
+  const output = recordValue(task.output);
+  const upstream = recordValue(output.upstream);
+  const value = upstream.status || upstream.rawStatus;
+  return typeof value === 'string' ? value : '';
 }
 
 async function copyText(value: string) {
@@ -149,7 +213,11 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
       const data = await proxyListTasks({ limit, offset: 0 });
       setTasks((current) => preserveLoadedTaskDetails(data.tasks, current));
       setTaskTotal(data.total ?? data.count);
-      const runningVideos = data.tasks.filter((task) => task.status === 'running' && (task.nodeType || task.kind) === 'video');
+      const runningVideos = data.tasks.filter((task) => (
+        ['submitted', 'waiting_upstream', 'processing', 'running'].includes(task.status)
+        && (task.nodeType || task.kind) === 'video'
+        && Boolean(taskUpstreamTaskId(task))
+      ));
       if (runningVideos.length > 0) {
         const results = await Promise.allSettled(runningVideos.map((task) => proxyGetVideoTask(task.id)));
         if (results.some((result) => result.status === 'fulfilled')) {
@@ -412,7 +480,7 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
   if (!isOpen) return null;
 
   return (
-    <FloatingWindow placement="bottom-right" contentClassName="max-h-[72vh] w-[500px] flex-col">
+    <FloatingWindow placement="bottom-right" contentClassName="max-h-[72vh] w-[620px] max-w-[calc(100vw-24px)] flex-col">
       <div className="flex items-center gap-2 border-b border-panel-border px-3 py-2">
         <div className="text-sm font-medium text-white">任务历史</div>
         <span className="rounded bg-canvas-bg px-1.5 py-0.5 text-[10px] text-gray-500">{taskSummary}</span>
@@ -435,19 +503,23 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
             className="w-full rounded-md border border-panel-border bg-canvas-bg py-1.5 pl-8 pr-3 text-[10px] text-white placeholder-gray-600 focus:border-accent focus:outline-none"
           />
         </div>
-        <select
+        <DarkSelect
           value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value as TaskHistoryStatusFilter)}
-          className="rounded-md border border-panel-border bg-canvas-bg px-2 py-1.5 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+          onChange={(value) => setStatusFilter(value as TaskHistoryStatusFilter)}
+          buttonClassName="px-2 py-1.5 text-[10px]"
           title="按任务状态筛选"
-        >
-          <option value="all">全部状态</option>
-          <option value="queued">排队中</option>
-          <option value="running">运行中</option>
-          <option value="succeeded">已完成</option>
-          <option value="failed">失败</option>
-          <option value="cancelled">已取消</option>
-        </select>
+          options={[
+            { label: '全部状态', value: 'all' },
+            { label: '排队中', value: 'queued' },
+            { label: '已提交', value: 'submitted' },
+            { label: '等待上游', value: 'waiting_upstream' },
+            { label: '生成中', value: 'processing' },
+            { label: '运行中', value: 'running' },
+            { label: '已完成', value: 'succeeded' },
+            { label: '失败', value: 'failed' },
+            { label: '已取消', value: 'cancelled' },
+          ]}
+        />
       </div>
 
       <div className="space-y-2 border-b border-panel-border px-3 py-2">
@@ -475,28 +547,24 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
           </button>
         </div>
         <div className="flex items-center gap-2">
-          <select
+          <DarkSelect
             value={targetCollectionId}
-            onChange={(event) => setTargetCollectionId(event.target.value)}
-            className="min-w-0 flex-1 rounded-md border border-panel-border bg-canvas-bg px-2 py-1 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
-          >
-            {collections.length === 0 ? (
-              <option value="">自动创建默认集合</option>
-            ) : (
-              collections.map((collection) => (
-                <option key={collection.id} value={collection.id}>{collection.name}</option>
-              ))
-            )}
-          </select>
+            onChange={setTargetCollectionId}
+            className="min-w-0 flex-1"
+            buttonClassName="px-2 py-1 text-[10px]"
+            options={collections.length === 0
+              ? [{ label: '自动创建默认集合', value: '' }]
+              : collections.map((collection) => ({ label: collection.name, value: collection.id }))}
+          />
           {selectedRoles.length > 0 && (
-            <select
+            <DarkSelect
               value={targetAssetRole}
-              onChange={(event) => setTargetAssetRole(event.target.value)}
-              className="w-24 rounded-md border border-panel-border bg-canvas-bg px-2 py-1 text-[10px] text-gray-200 focus:border-accent focus:outline-none"
+              onChange={setTargetAssetRole}
+              className="w-24"
+              buttonClassName="px-2 py-1 text-[10px]"
               title="加入集合时的素材角色"
-            >
-              {selectedRoles.map((role) => <option key={role} value={role}>{role}</option>)}
-            </select>
+              options={selectedRoles.map((role) => ({ label: role, value: role }))}
+            />
           )}
           <span className="shrink-0 text-[10px] text-gray-500">
             {collections.length}/{Math.max(collectionTotal, collections.length)}
@@ -540,33 +608,50 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
             const logs = task.logs || [];
             const logsLoading = detailLoadingTaskIds.includes(task.id);
             const newTaskAssets = selectedCollection ? filterAssetsNotInCollection(assets, selectedCollection) : assets;
+            const durationLabel = formatDuration(task.durationMs);
+            const promptPreview = taskPromptPreview(task);
+            const upstreamId = taskUpstreamTaskId(task);
+            const upstreamStatusText = taskUpstreamStatus(task);
 
             return (
-              <div key={task.id} className="rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
-                <div className="mb-2 flex items-center gap-2">
-                  <span className={cn('rounded-full px-2 py-0.5 text-[10px] font-medium', statusClass(task.status))}>
+              <div key={task.id} className="rounded-lg border border-panel-border bg-panel-bg p-3 shadow-sm">
+                <div className="mb-2 flex items-start gap-2">
+                  <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium', statusClass(task.status))}>
                     {STATUS_LABEL[task.status]}
                   </span>
-                  <span className="text-[10px] text-gray-500">{task.nodeType || task.kind}</span>
-                  {task.model && <span className="truncate text-[10px] text-gray-500">{task.model}</span>}
-                  {typeof task.creditCost === 'number' && task.creditStatus && task.creditStatus !== 'none' && (
-                    <span className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px]',
-                      task.creditStatus === 'refunded'
-                        ? 'bg-sky-500/10 text-sky-300'
-                        : task.creditCost > 0
-                          ? 'bg-amber-500/10 text-amber-300'
-                          : 'bg-emerald-500/10 text-emerald-300'
-                    )}
-                    >
-                      {task.creditStatus === 'refunded'
-                        ? `已退 ${task.creditCost} 积分`
-                        : task.creditCost > 0
-                          ? `-${task.creditCost} 积分`
-                          : '用户 Key 免费'}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate text-xs font-medium text-gray-100">{task.model || '未记录模型'}</span>
+                      <span className="shrink-0 rounded border border-panel-border px-1.5 py-0.5 text-[9px] text-gray-400">
+                        {taskTypeLabel(task)}
+                      </span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-gray-500">
+                      <span title={task.id}>任务 {shortTaskId(task.id)}</span>
+                      {task.providerId && <span>{task.providerId}</span>}
+                      <span>{new Date(task.createdAt).toLocaleString()}</span>
+                    </div>
+                  </div>
+                  {durationLabel && (
+                    <span className="shrink-0 rounded-md border border-panel-border bg-canvas-bg px-2 py-1 text-[10px] text-gray-400">
+                      {durationLabel}
                     </span>
                   )}
-                  <span className="ml-auto text-[10px] text-gray-500">{new Date(task.createdAt).toLocaleString()}</span>
+                </div>
+
+                <div className="mb-2 grid grid-cols-2 gap-1.5 text-[10px] md:grid-cols-4">
+                  <TaskMetric label="通道" value={taskRouteLabel(task)} />
+                  <TaskMetric label="计费" value={task.creditStatus && task.creditStatus !== 'none' ? (
+                    task.creditStatus === 'refunded'
+                      ? `已退 ${task.creditCost || 0}`
+                      : (task.creditCost || 0) > 0
+                        ? `-${task.creditCost} 积分`
+                        : '用户 Key'
+                  ) : '-'} />
+                  <TaskMetric label="产物" value={`${assets.length} 个`} />
+                  <TaskMetric label="更新时间" value={new Date(task.updatedAt).toLocaleTimeString()} />
+                  {upstreamId && <TaskMetric label="上游任务" value={shortTaskId(upstreamId)} title={upstreamId} />}
+                  {upstreamStatusText && <TaskMetric label="上游状态" value={upstreamStatusText} />}
                 </div>
 
                 {assets.length > 0 && (
@@ -628,11 +713,22 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
                 )}
 
                 <div className="space-y-2 text-[10px] text-gray-400">
-                  {text && <div className="max-h-20 overflow-auto whitespace-pre-wrap rounded bg-black/20 p-2">{text}</div>}
-                  {task.input?.prompt && <div className="line-clamp-2 rounded bg-black/20 p-2 text-gray-500">{String(task.input.prompt)}</div>}
+                  {promptPreview && (
+                    <div className="rounded-md border border-panel-border bg-canvas-bg p-2">
+                      <div className="mb-1 text-[9px] text-gray-600">输入</div>
+                      <div className="line-clamp-2 text-gray-400">{promptPreview}</div>
+                    </div>
+                  )}
+                  {text && (
+                    <div className="max-h-24 overflow-auto whitespace-pre-wrap rounded-md border border-panel-border bg-canvas-bg p-2">
+                      <div className="mb-1 text-[9px] text-gray-600">输出</div>
+                      <div className="text-gray-300">{text}</div>
+                    </div>
+                  )}
                   {errorSummary && (
-                    <div className="space-y-1.5 rounded border border-red-500/20 bg-red-500/10 p-2 text-red-200">
+                    <div className="space-y-1.5 rounded-md border border-red-500/30 bg-red-500/10 p-2 text-red-200">
                       <div className="flex flex-wrap items-center gap-1.5">
+                        <AlertCircle className="h-3.5 w-3.5 text-red-300" />
                         <span className="font-medium">{errorSummary.title}</span>
                         {errorSummary.retryable !== undefined && (
                           <span className={cn(
@@ -809,6 +905,25 @@ export function TaskHistoryPanel({ isOpen, onClose }: TaskHistoryPanelProps) {
         )}
       </div>
     </FloatingWindow>
+  );
+}
+
+function TaskMetric({
+  label,
+  title,
+  value,
+}: {
+  label: string;
+  title?: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="min-w-0 rounded-md border border-panel-border bg-canvas-bg px-2 py-1.5">
+      <div className="text-[9px] text-gray-600">{label}</div>
+      <div className="mt-0.5 truncate text-[10px] text-gray-300" title={title || (typeof value === 'string' ? value : undefined)}>
+        {value || '-'}
+      </div>
+    </div>
   );
 }
 

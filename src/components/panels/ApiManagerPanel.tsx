@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { FloatingWindow } from '../layout/FloatingWindow';
+import { PanelButton } from '../ui/PanelButton';
 import { fetchModelsList, useApiStore } from '../../stores/apiStore';
 import {
   getCategoryLabel,
@@ -1405,10 +1406,10 @@ function LocalEditor(props: {
       />
       <SwitchRow label="启用这个 API 实例" checked={props.form.isEnabled} onChange={(value) => props.onChange({ isEnabled: value })} />
       <div className="flex gap-2">
-        <button onClick={props.onSave} className="flex flex-1 items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent-hover">
+        <PanelButton onClick={props.onSave} variant="primary" size="md" className="flex-1">
           <Save className="h-3.5 w-3.5" />
           保存本地配置
-        </button>
+        </PanelButton>
         {!props.isAdding && (
           <button onClick={props.onDelete} className="rounded-md px-3 py-2 text-red-400 hover:bg-red-500/10" title="删除">
             <Trash2 className="h-3.5 w-3.5" />
@@ -1525,48 +1526,52 @@ function ServerKeyEditor(props: {
         onChange={(value) => props.onChange({ isEnabled: value })}
       />
       <div className="flex flex-wrap gap-2">
-        <button
+        <PanelButton
           onClick={props.onSave}
           disabled={props.loading || !canManageCurrentKey}
-          className="admin-save-button flex flex-1 items-center justify-center gap-1.5 rounded-md px-4 py-2 text-xs font-medium text-white disabled:opacity-50"
+          variant="primary"
+          size="md"
+          className="flex-1"
         >
           {props.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           保存{currentKeyLabel}
-        </button>
+        </PanelButton>
         {props.form.id && (
-          <button onClick={() => props.onTest()} disabled={props.testing} className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:opacity-50">
+          <PanelButton onClick={() => props.onTest()} disabled={props.testing} variant="secondary" size="md">
             {props.testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
             测试连接
-          </button>
+          </PanelButton>
         )}
         {props.form.id && (
-          <button onClick={() => props.onTest({ testText: true })} disabled={props.testing} className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:opacity-50">
+          <PanelButton onClick={() => props.onTest({ testText: true })} disabled={props.testing} variant="secondary" size="md">
             文本测试
-          </button>
+          </PanelButton>
         )}
         {props.form.id && (
-          <button onClick={() => props.onTest({ testImage: true })} disabled={props.testing} className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:opacity-50">
+          <PanelButton onClick={() => props.onTest({ testImage: true })} disabled={props.testing} variant="secondary" size="md">
             图片能力
-          </button>
+          </PanelButton>
         )}
         {props.form.id && (
-          <button onClick={() => props.onTest({ testVideo: true })} disabled={props.testing} className="flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent disabled:opacity-50">
+          <PanelButton onClick={() => props.onTest({ testVideo: true })} disabled={props.testing} variant="secondary" size="md">
             视频能力
-          </button>
+          </PanelButton>
         )}
         {props.form.id && (
-          <button
+          <PanelButton
             onClick={() => props.onTest({ testText: true, testImage: true, testVideo: true })}
             disabled={props.testing}
-            className="flex items-center gap-1.5 rounded-md border border-emerald-500/30 px-3 py-2 text-xs text-emerald-300 hover:bg-emerald-500/10 disabled:opacity-50"
+            variant="primary"
+            size="md"
+            className="border-emerald-500/45 bg-emerald-500/15 text-emerald-100 hover:border-emerald-400/70 hover:bg-emerald-500/25"
           >
             全部能力
-          </button>
+          </PanelButton>
         )}
         {props.form.id && canManageCurrentKey && (
-          <button onClick={props.onDelete} className="rounded-md px-3 py-2 text-red-400 hover:bg-red-500/10" title="删除">
+          <PanelButton onClick={props.onDelete} variant="danger" size="md" title="删除">
             <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          </PanelButton>
         )}
       </div>
       {props.testResult && <ApiKeyTestSummary result={props.testResult} />}
@@ -2058,10 +2063,10 @@ function CapabilityEditor(props: {
           不常用或厂商专属字段仍可写在 JSON 内。常用限制建议优先用上方表单维护，减少字段名写错。
         </p>
       </div>
-      <button onClick={props.onSave} disabled={props.loading || Boolean(jsonError)} className="flex w-full items-center justify-center gap-1.5 rounded-md bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent-hover disabled:opacity-50">
+      <PanelButton onClick={props.onSave} disabled={props.loading || Boolean(jsonError)} variant="primary" size="md" className="w-full">
         {props.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
         保存模型能力
-      </button>
+      </PanelButton>
     </div>
   );
 }

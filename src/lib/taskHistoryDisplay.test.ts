@@ -223,6 +223,9 @@ test('extractTaskOutputText supports text, script, prompt, and shot list outputs
 
 test('formatTaskLogEvent translates known queue events', () => {
   assert.equal(formatTaskLogEvent('started'), '开始执行');
+  assert.equal(formatTaskLogEvent('upstream_image_submitted'), '图片请求已提交');
+  assert.equal(formatTaskLogEvent('upstream_text_submitted'), '文本请求已提交');
+  assert.equal(formatTaskLogEvent('upstream_video_request_submitted'), '视频请求已提交');
   assert.equal(formatTaskLogEvent('retry_created'), '创建重试任务');
   assert.equal(formatTaskLogEvent('custom_event'), 'custom_event');
 });
