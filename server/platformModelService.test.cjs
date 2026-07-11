@@ -371,6 +371,13 @@ test('platform model routes can only bind enabled server keys', () => {
 
 test('bulk creates platform models from saved server key models', () => {
   const repository = createMemoryRepository();
+  const getApiKey = repository.getApiKey.bind(repository);
+  repository.getApiKey = (id) => {
+    const apiKey = getApiKey(id);
+    return id === 'openai-server-key'
+      ? { ...apiKey, allowedCapabilities: { chat: false, imageGeneration: true, videoGeneration: false } }
+      : apiKey;
+  };
   const service = createPlatformModelService({ repository });
 
   const result = service.createPlatformModelsFromKey({

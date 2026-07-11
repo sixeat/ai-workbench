@@ -8,6 +8,7 @@ const {
   adapterSupportsCapabilities,
   capabilityContractIssues,
   keyAllowsCapability,
+  keyAllowsOptionalCapability,
 } = require('../modelCatalog.cjs');
 
 function hasCapabilities(value) {
@@ -145,8 +146,8 @@ function createCredentialService({
         if (!adapterSupportsCapabilities(adapterId, apiKeyModel.capabilities)) return false;
         if (apiKeyModel.capabilities?.[platformModel.capability] !== true) return false;
         if (!keyAllowsCapability(apiKey, platformModel.capability)) return false;
-        if (platformModel.capabilities?.imageReference && !keyAllowsCapability(apiKey, 'imageReference')) return false;
-        if (platformModel.capabilities?.multiImageReference && !keyAllowsCapability(apiKey, 'multiImageReference')) return false;
+        if (platformModel.capabilities?.imageReference && !keyAllowsOptionalCapability(apiKey, 'imageReference')) return false;
+        if (platformModel.capabilities?.multiImageReference && !keyAllowsOptionalCapability(apiKey, 'multiImageReference')) return false;
         return !hasCapabilities(platformModel.capabilities)
           || capabilityContractIssues(apiKeyModel.capabilities, platformModel.capabilities).length === 0;
       });

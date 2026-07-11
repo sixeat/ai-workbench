@@ -680,7 +680,20 @@ export function PlatformModelsPanel() {
         capability: bulkCapability,
         apiKeyModelIds: bulkSelectedModels,
       });
-      setNotice(`已创建 ${result.count.created} 个平台模型，跳过 ${result.count.skipped} 个已绑定模型`);
+      const reasonLabels: Record<string, string> = {
+        adapter_not_configured: '缺少可执行适配器',
+        already_bound: '已绑定到平台模型',
+        capability_mismatch: '模型能力与所选类型不匹配',
+        key_capability_mismatch: '服务器 Key 未开放所需能力',
+        model_not_enabled: '模型未启用或已失效',
+      };
+      const skippedDetails = result.skipped
+        .map((item) => `${item.upstreamModel}（${reasonLabels[item.reason] || item.reason}）`)
+        .join('、');
+      setNotice([
+        `已创建 ${result.count.created} 个平台模型`,
+        result.count.skipped > 0 ? `跳过 ${result.count.skipped} 个：${skippedDetails}` : '',
+      ].filter(Boolean).join('；'));
       setBulkSelectedModels([]);
       if (result.created[0]?.model?.id) {
         setSelectedModelId(result.created[0].model.id);

@@ -215,6 +215,12 @@ function keyAllowsCapability(apiKey, capability) {
   return allowed[capability] === true;
 }
 
+function keyAllowsOptionalCapability(apiKey, capability) {
+  const allowed = apiKey?.allowedCapabilities;
+  if (!allowed || typeof allowed !== 'object' || !Object.hasOwn(allowed, capability)) return true;
+  return allowed[capability] === true;
+}
+
 function modelSupportsNodeType(model, nodeType) {
   const capabilities = model?.capabilities || {};
   if (['textModel', 'script', 'shotSplit', 'promptOptimize'].includes(nodeType)) {
@@ -228,7 +234,7 @@ function modelSupportsNodeType(model, nodeType) {
       capabilities.imageGeneration
       && capabilities.imageReference
       && keyAllowsCapability(model.apiKey, 'imageGeneration')
-      && keyAllowsCapability(model.apiKey, 'imageReference')
+      && keyAllowsOptionalCapability(model.apiKey, 'imageReference')
     );
   }
   if (nodeType === 'videoGen') {
@@ -239,7 +245,7 @@ function modelSupportsNodeType(model, nodeType) {
       capabilities.videoGeneration
       && (capabilities.multiImageReference || capabilities.video?.maxReferenceImages > 1)
       && keyAllowsCapability(model.apiKey, 'videoGeneration')
-      && keyAllowsCapability(model.apiKey, 'multiImageReference')
+      && keyAllowsOptionalCapability(model.apiKey, 'multiImageReference')
     );
   }
   return true;
@@ -254,6 +260,7 @@ module.exports = {
   hasDeclaredOperation,
   isSupportedAdapterId,
   keyAllowsCapability,
+  keyAllowsOptionalCapability,
   modelSupportsNodeType,
   operationForCapabilities,
 };

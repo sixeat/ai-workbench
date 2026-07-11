@@ -5,6 +5,7 @@ const {
   adapterSupportsCapabilities,
   capabilityContractIssues,
   keyAllowsCapability,
+  keyAllowsOptionalCapability,
 } = require('../modelCatalog.cjs');
 
 const PLATFORM_MODEL_CAPABILITIES = new Set(['chat', 'imageGeneration', 'videoGeneration']);
@@ -112,8 +113,8 @@ function alignCapabilitiesToPlatformCapability(capabilities, capability) {
 
 function keySupportsPlatformContract(apiKey, capability, contract = {}) {
   if (!keyAllowsCapability(apiKey, capability)) return false;
-  if (contract.imageReference && !keyAllowsCapability(apiKey, 'imageReference')) return false;
-  if (contract.multiImageReference && !keyAllowsCapability(apiKey, 'multiImageReference')) return false;
+  if (contract.imageReference && !keyAllowsOptionalCapability(apiKey, 'imageReference')) return false;
+  if (contract.multiImageReference && !keyAllowsOptionalCapability(apiKey, 'multiImageReference')) return false;
   return true;
 }
 
