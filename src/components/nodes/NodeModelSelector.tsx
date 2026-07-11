@@ -72,13 +72,17 @@ export function NodeModelSelector({
         </button>
 
         {showModelSelect && (
-          <div className="absolute bottom-full left-0 z-50 mb-1 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-panel-border bg-panel-bg p-2 shadow-xl">
+          <div
+            className="nowheel nodrag absolute bottom-full left-0 z-50 mb-1 w-[380px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border border-panel-border bg-panel-bg p-2 shadow-xl"
+            onPointerDown={(event) => event.stopPropagation()}
+            onWheelCapture={(event) => event.stopPropagation()}
+          >
             {!hasSelectableModel ? (
               <div className="px-2 py-3 text-center text-[10px] text-gray-500">
                 暂无可用模型。请先在“我的 API”添加 Key 并获取模型列表，或让管理员发布服务器模型。
               </div>
             ) : (
-              <div className="grid max-h-[260px] grid-cols-2 gap-2 overflow-auto">
+              <div className="grid h-[260px] min-h-0 grid-cols-2 gap-2 overflow-hidden">
                 <PlatformModelColumn
                   icon={<Cloud className="h-3 w-3" />}
                   models={availablePlatformModels}
@@ -141,15 +145,15 @@ function CustomModelColumn({
   title: string;
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-panel-border bg-canvas-bg/40 p-1.5">
-      <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium text-gray-400">
+    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-panel-border bg-canvas-bg/40 p-1.5">
+      <div className="mb-1 flex shrink-0 items-center gap-1.5 px-1 py-0.5 text-[10px] font-medium text-gray-400">
         {icon}
         <span className="truncate">{title}</span>
       </div>
       {models.length === 0 ? (
         <div className="px-1 py-2 text-[10px] text-gray-600">暂无我的模型</div>
       ) : (
-        <div className="space-y-1">
+        <div className="nowheel min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
           {models.map((model) => (
             <button
               key={model.apiKeyModelId || `${model.instanceId}:${model.model}`}
@@ -194,15 +198,15 @@ function PlatformModelColumn({
   title: string;
 }) {
   return (
-    <div className="min-w-0 rounded-md border border-panel-border bg-canvas-bg/40 p-1.5">
-      <div className="mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium text-gray-400">
+    <div className="flex min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-panel-border bg-canvas-bg/40 p-1.5">
+      <div className="mb-1 flex shrink-0 items-center gap-1.5 px-1 py-0.5 text-[10px] font-medium text-gray-400">
         {icon}
         <span className="truncate">{title}</span>
       </div>
       {models.length === 0 ? (
         <div className="px-1 py-2 text-[10px] text-gray-600">暂无服务器模型</div>
       ) : (
-        <div className="space-y-1">
+        <div className="nowheel min-h-0 flex-1 space-y-1 overflow-y-auto overscroll-contain pr-1">
           {models.map((model) => (
             <button
               key={model.id}
