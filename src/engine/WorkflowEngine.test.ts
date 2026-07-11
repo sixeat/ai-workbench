@@ -3,6 +3,7 @@ import { beforeEach, test } from 'node:test';
 import type { Edge, Node } from '@xyflow/react';
 import type { ExecutionEvent, ExecutionPatch, TextModelContext } from './executionTypes';
 import type { NodeData, NodeType } from '../types/nodes';
+import { useModelCatalogStore } from '../stores/modelCatalogStore';
 
 type WorkflowEngineModule = typeof import('./WorkflowEngine');
 
@@ -77,6 +78,7 @@ function logMessages(events: ExecutionEvent[]) {
 
 beforeEach(() => {
   delete (globalThis as any).fetch;
+  useModelCatalogStore.setState({ personalModels: [], platformModels: [], loading: false, loadedAt: 0, error: '' });
 });
 
 test('executeNodeIdsOnGraph completes a text input node and reuses it when unchanged', async () => {
@@ -279,6 +281,46 @@ test('executeNodeIdsOnGraph rejects invalid node config before running', async (
 
   assert.equal(nodes[0].data.status, 'error');
   assert.match(String(nodes[0].data.error), /需要 number 类型/);
+});
+
+test('executeNodeIdsOnGraph validates image size against the selected platform model', async () => {
+  const { executeNodeIdsOnGraph } = await loadEngine();
+  useModelCatalogStore.setState({
+    platformModels: [{
+      id: 'gpt-image-2-platform',
+      displayName: 'GPT Image 2',
+      capability: 'imageGeneration',
+      model: 'gpt-image-2',
+      capabilities: {
+        imageGeneration: true,
+        image: { sizeAliases: ['1024x1024', '1024x1536'], maxImages: 1 },
+      },
+      isEnabled: true,
+      sortOrder: 100,
+      createdAt: '2026-07-11T00:00:00.000Z',
+      updatedAt: '2026-07-11T00:00:00.000Z',
+    }],
+  });
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    data: [{ id: 'asset-image-2', url: '/api/assets/asset-image-2', fileName: 'asset-image-2.png' }],
+  }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })) as typeof fetch;
+
+  const nodes = [makeNode('image', 'imageGen', {
+    modelSource: 'platform',
+    platformModelId: 'gpt-image-2-platform',
+    model: 'gpt-image-2',
+    prompt: 'a vertical poster',
+    size: '1024x1536',
+  })];
+  const sink = makeSink(nodes);
+
+  await executeNodeIdsOnGraph(new Set(['image']), 'run gpt image 2', nodes, [], sink);
+
+  assert.equal(nodes[0].data.status, 'completed');
+  assert.equal((nodes[0].data.outputs.image as { type?: string } | undefined)?.type, 'image');
 });
 
 test('executeNodeIdsOnGraph de-duplicates image assets in node run summary', async () => {

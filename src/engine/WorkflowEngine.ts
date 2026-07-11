@@ -4,6 +4,7 @@ import { getNodeDefinition } from '../data/nodeRegistry';
 import { inferTargetInputKey, MAIN_INPUT, MAIN_OUTPUT } from '../lib/connectionInference';
 import { generateId } from '../lib/utils';
 import { useCanvasStore } from '../stores/canvasStore';
+import { useModelCatalogStore } from '../stores/modelCatalogStore';
 import { useWorkflowStore } from '../stores/workflowStore';
 import { executeMerge, executePreview, executeTextInput, getExecutor } from './nodeExecutors';
 import { validateNodeConfig, validateNodeInputs } from './nodeIoSchema';
@@ -168,6 +169,26 @@ function getExecutionContext(
     modelContext: getUpstreamModelContext(node.id, edges, nodeMap),
     upstreamTaskIds: collectDirectUpstreamTaskIds(node.id, edges, nodeMap),
   };
+}
+
+function getSelectedModelCapabilities(node: Node<NodeData>) {
+  const platformModelId = typeof node.data.config.platformModelId === 'string'
+    ? node.data.config.platformModelId
+    : '';
+  const apiKeyModelId = typeof node.data.config.apiKeyModelId === 'string'
+    ? node.data.config.apiKeyModelId
+    : '';
+  const { platformModels, personalModels } = useModelCatalogStore.getState();
+
+  if (platformModelId) {
+    return platformModels.find((model) => model.id === platformModelId)?.capabilities || null;
+  }
+
+  if (apiKeyModelId) {
+    return personalModels.find((model) => model.id === apiKeyModelId)?.capabilities || null;
+  }
+
+  return null;
 }
 
 function getNodeInputs(
@@ -493,7 +514,7 @@ async function* executeNodeInContext(
     return;
   }
 
-  const configValidation = validateNodeConfig(node.data);
+  const configValidation = validateNodeConfig(node.data, getSelectedModelCapabilities(node));
   if (!configValidation.ok) {
     const error = configValidation.errors.join('\n');
     yield {
