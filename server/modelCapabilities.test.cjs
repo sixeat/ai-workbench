@@ -61,6 +61,7 @@ test('model capability presets expose complete manually maintained templates', (
   const bailianTextVideo = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-t2v*');
   const bailianImageVideo = presets.find((preset) => preset.providerId === 'aliyun-bailian' && preset.modelPattern === 'wan2.7-*-i2v*');
   const gptImage2 = presets.find((preset) => preset.providerId === 'openai-compatible' && preset.modelPattern === 'gpt-image-2*');
+  const xaiVideo = presets.find((preset) => preset.providerId === 'xai' && preset.modelPattern === 'grok-imagine-video*');
 
   assert.ok(seedance);
   assert.equal(seedance.capabilities.videoGeneration, true);
@@ -100,6 +101,12 @@ test('model capability presets expose complete manually maintained templates', (
   assert.equal(gptImage2.capabilities.image.maxReferenceImages, 16);
   assert.equal(gptImage2.capabilities.image.maxPixels, 8294400);
   assert.equal(gptImage2.capabilities.responseFormatB64, true);
+
+  assert.ok(xaiVideo);
+  assert.equal(xaiVideo.capabilities.videoGeneration, true);
+  assert.deepEqual(xaiVideo.capabilities.video.ratios, ['16:9', '9:16']);
+  assert.deepEqual(xaiVideo.capabilities.video.resolutions, ['480P', '720P', '1080P']);
+  assert.equal(xaiVideo.capabilities.video.maxReferenceImages, 7);
 });
 
 test('gpt-image-2 model capabilities mark it as an image generation model', () => {
@@ -114,6 +121,25 @@ test('gpt-image-2 model capabilities mark it as an image generation model', () =
   assert.deepEqual(capabilities.image.sizeAliases.slice(-2), ['3840x2160', '2160x3840']);
 });
 
+test('openai compatible fallback treats unknown gpt models as text only', () => {
+  const capabilities = getModelCapabilities('openai-compatible', 'gpt-5.6-sol');
+  const resolved = resolveModelCapabilitiesDetailed('openai-compatible', 'gpt-5.6-sol');
+
+  assert.equal(capabilities.chat, true);
+  assert.equal(capabilities.imageGeneration, false);
+  assert.equal(capabilities.videoGeneration, false);
+  assert.ok(resolved.matchedRules.some((rule) => rule.modelPattern === '*'));
+});
+
+test('wanx 2.1 text-to-image models override the Bailian text fallback', () => {
+  const capabilities = getModelCapabilities('aliyun-bailian', 'wanx2.1-t2i-plus');
+
+  assert.equal(capabilities.chat, false);
+  assert.equal(capabilities.imageGeneration, true);
+  assert.equal(capabilities.videoGeneration, false);
+  assert.equal(capabilities.image.endpointType, 'dashscope_image_synthesis');
+});
+
 test('resolved model capabilities include matched rules for admin previews', () => {
   const resolved = resolveModelCapabilitiesDetailed('openai-compatible', 'gpt-image-2');
 
@@ -121,6 +147,33 @@ test('resolved model capabilities include matched rules for admin previews', () 
   assert.equal(resolved.capabilities.imageGeneration, true);
   assert.ok(resolved.matchedRules.some((rule) => rule.modelPattern === '*'));
   assert.ok(resolved.matchedRules.some((rule) => rule.modelPattern === 'gpt-image-2*'));
+});
+
+test('xai grok imagine video capabilities validate duration and ratios', () => {
+  const capabilities = getModelCapabilities('xai', 'grok-imagine-video-1.5');
+
+  assert.equal(capabilities.videoGeneration, true);
+  assert.equal(capabilities.video.durationMin, 6);
+  assert.equal(capabilities.video.durationMax, 15);
+
+  const valid = filterVideoBodyByCapabilities({
+    model: 'grok-imagine-video-1.5',
+    content: [{ type: 'text', text: 'cinematic dragon fight' }],
+    ratio: '16:9',
+    resolution: '720P',
+    duration: 6,
+  }, capabilities);
+  assert.equal(valid.ok, true);
+
+  const invalidRatio = filterVideoBodyByCapabilities({
+    model: 'grok-imagine-video-1.5',
+    content: [{ type: 'text', text: 'cinematic dragon fight' }],
+    ratio: '1:1',
+    resolution: '720P',
+    duration: 6,
+  }, capabilities);
+  assert.equal(invalidRatio.ok, false);
+  assert.match(invalidRatio.error, /aspect ratios/);
 });
 
 test('model capability preset route can filter by provider', () => {

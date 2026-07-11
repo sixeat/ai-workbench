@@ -1,6 +1,7 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { Bot, CheckCircle2, Loader2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import {
+  proxyAdminCreatePlatformModelsFromKey,
   proxyAdminDeletePlatformModel,
   proxyAdminDeletePlatformModelRoute,
   proxyAdminListPlatformModels,
@@ -9,7 +10,9 @@ import {
   proxyListModelCapabilityPresets,
   proxyResolveModelCapabilities,
   proxyListApiKeys,
+  proxyListApiKeyModels,
   type ProxyApiKey,
+  type ProxyApiKeyModel,
   type ProxyModelCapabilityPreset,
   type ProxyPlatformModel,
   type ProxyPlatformModelCapability,
@@ -36,6 +39,7 @@ const emptyModelForm = {
 const emptyRouteForm = {
   id: '',
   apiKeyId: '',
+  apiKeyModelId: '',
   providerId: '',
   upstreamModel: '',
   priority: 100,
@@ -54,6 +58,14 @@ const CAPABILITY_SOURCE_LABELS: Record<string, string> = {
   'platform-override': '平台手动覆盖',
   'route-inferred': '路由自动推断',
 };
+
+type WorkspaceView = 'details' | 'publish' | 'routes' | 'capabilities';
+
+const workspaceTabs: Array<{ label: string; value: WorkspaceView }> = [
+  { label: '模型详情', value: 'details' },
+  { label: '路由管理', value: 'routes' },
+  { label: '能力限制', value: 'capabilities' },
+];
 
 const CLIENT_FALLBACK_PRESETS: ProxyModelCapabilityPreset[] = [
   {
@@ -204,6 +216,7 @@ function routeToForm(route: ProxyPlatformModelRoute) {
   return {
     id: route.id,
     apiKeyId: route.apiKeyId,
+    apiKeyModelId: route.apiKeyModelId || '',
     providerId: route.providerId || '',
     upstreamModel: route.upstreamModel || '',
     priority: route.priority || 100,
@@ -211,13 +224,45 @@ function routeToForm(route: ProxyPlatformModelRoute) {
   };
 }
 
+function primaryRoute(model: ProxyPlatformModel | null): ProxyPlatformModelRoute | null {
+  if (!model?.routes?.length) return null;
+  return [...model.routes].sort((left, right) => (left.priority || 100) - (right.priority || 100))[0];
+}
+
+function routeSummary(model: ProxyPlatformModel): string {
+  const route = primaryRoute(model);
+  if (!route) return '未绑定上游路由';
+  return `${route.apiKey?.name || route.apiKeyId} / ${route.upstreamModel || model.model}`;
+}
+
+function modelStatusBadges(model: ProxyPlatformModel): Array<{ label: string; tone: 'green' | 'amber' | 'red' | 'gray' }> {
+  if (!model.isEnabled) return [{ label: '已禁用', tone: 'red' }];
+  if (!model.routes?.length) return [{ label: '未绑定路由', tone: 'amber' }];
+  if (!model.capabilitySource || model.capabilitySource === 'fallback' || model.capabilityWarnings?.length) {
+    return [
+      { label: '可运行', tone: 'green' },
+      { label: '能力未声明', tone: 'amber' },
+    ];
+  }
+  return [{ label: '可运行', tone: 'green' }];
+}
+
+function badgeClassName(tone: 'green' | 'amber' | 'red' | 'gray'): string {
+  if (tone === 'green') return 'bg-emerald-500/15 text-emerald-300';
+  if (tone === 'amber') return 'bg-amber-500/15 text-amber-300';
+  if (tone === 'red') return 'bg-red-500/15 text-red-300';
+  return 'bg-panel-bg text-gray-400';
+}
+
 export function PlatformModelsPanel() {
   const [models, setModels] = useState<ProxyPlatformModel[]>([]);
   const [serverKeys, setServerKeys] = useState<ProxyApiKey[]>([]);
   const [presets, setPresets] = useState<ProxyModelCapabilityPreset[]>([]);
   const [selectedModelId, setSelectedModelId] = useState('');
+  const [activeView, setActiveView] = useState<WorkspaceView>('details');
   const [modelForm, setModelForm] = useState(emptyModelForm);
   const [routeForm, setRouteForm] = useState(emptyRouteForm);
+  const [routeKeyModels, setRouteKeyModels] = useState<ProxyApiKeyModel[]>([]);
   const [showAdvancedCapabilities, setShowAdvancedCapabilities] = useState(false);
   const [capabilityPreview, setCapabilityPreview] = useState<ProxyResolvedModelCapabilities | null>(null);
   const [capabilityPreviewError, setCapabilityPreviewError] = useState('');
@@ -233,6 +278,12 @@ export function PlatformModelsPanel() {
   const [modelSaveMessage, setModelSaveMessage] = useState('');
   const [routeSaveState, setRouteSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [routeSaveMessage, setRouteSaveMessage] = useState('');
+  const [bulkKeyId, setBulkKeyId] = useState('');
+  const [bulkKeyModels, setBulkKeyModels] = useState<ProxyApiKeyModel[]>([]);
+  const [bulkCapability, setBulkCapability] = useState<ProxyPlatformModelCapability>('imageGeneration');
+  const [bulkSelectedModels, setBulkSelectedModels] = useState<string[]>([]);
+  const [bulkCreating, setBulkCreating] = useState(false);
+  const [appliedCapabilityTemplate, setAppliedCapabilityTemplate] = useState('');
 
   const selectedModel = useMemo(
     () => models.find((model) => model.id === selectedModelId) || null,
@@ -243,8 +294,20 @@ export function PlatformModelsPanel() {
     [routeForm.apiKeyId, serverKeys]
   );
   const selectedRouteKeyModels = useMemo(
-    () => Array.from(new Set((selectedRouteKey?.models || []).filter(Boolean))),
-    [selectedRouteKey]
+    () => routeKeyModels.filter((model) => model.isEnabled && model.discoveryStatus === 'active'),
+    [routeKeyModels]
+  );
+  const selectedBulkKey = useMemo(
+    () => serverKeys.find((key) => key.id === bulkKeyId) || null,
+    [bulkKeyId, serverKeys]
+  );
+  const selectedBulkKeyModels = useMemo(
+    () => bulkKeyModels.filter((model) => (
+      model.isEnabled
+      && model.discoveryStatus === 'active'
+      && model.capabilities?.[bulkCapability] === true
+    )),
+    [bulkCapability, bulkKeyModels]
   );
   const visibleCapabilitySource = capabilityPreview?.source || selectedModel?.capabilitySource || '';
   const parsedCapabilities = useMemo(
@@ -271,7 +334,9 @@ export function PlatformModelsPanel() {
       setModels(modelData.models);
       setServerKeys(keyData.apiKeys.filter((key) => key.keyScope === 'server'));
       setPresets(presetData.presets);
-      setSelectedModelId((current) => current || modelData.models[0]?.id || '');
+      setSelectedModelId((current) =>
+        modelData.models.some((model) => model.id === current) ? current : modelData.models[0]?.id || ''
+      );
     } catch (err) {
       setError(toErrorMessage(err, '平台模型加载失败'));
     } finally {
@@ -285,14 +350,70 @@ export function PlatformModelsPanel() {
 
   useEffect(() => {
     if (!selectedModel) return;
+    const route = primaryRoute(selectedModel);
     setModelForm(modelToForm(selectedModel));
-    setRouteForm({
+    setAppliedCapabilityTemplate('');
+    setRouteForm(route ? routeToForm(route) : {
       ...emptyRouteForm,
       upstreamModel: selectedModel.model,
       apiKeyId: serverKeys[0]?.id || '',
       providerId: serverKeys[0]?.providerId || '',
     });
   }, [selectedModel, serverKeys]);
+
+  useEffect(() => {
+    if (bulkKeyId || serverKeys.length === 0) return;
+    setBulkKeyId(serverKeys[0].id);
+  }, [bulkKeyId, serverKeys]);
+
+  useEffect(() => {
+    if (!routeForm.apiKeyId) {
+      setRouteKeyModels([]);
+      return;
+    }
+    let cancelled = false;
+    proxyListApiKeyModels(routeForm.apiKeyId)
+      .then((data) => {
+        if (!cancelled) setRouteKeyModels(data.models);
+      })
+      .catch(() => {
+        if (!cancelled) setRouteKeyModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [routeForm.apiKeyId]);
+
+  useEffect(() => {
+    if (!bulkKeyId) {
+      setBulkKeyModels([]);
+      return;
+    }
+    let cancelled = false;
+    proxyListApiKeyModels(bulkKeyId)
+      .then((data) => {
+        if (!cancelled) setBulkKeyModels(data.models);
+      })
+      .catch(() => {
+        if (!cancelled) setBulkKeyModels([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bulkKeyId]);
+
+  useEffect(() => {
+    if (routeForm.apiKeyModelId || routeKeyModels.length === 0) return;
+    const selected = routeKeyModels.find((model) => model.upstreamModel === routeForm.upstreamModel)
+      || routeKeyModels.find((model) => model.isEnabled && model.discoveryStatus === 'active');
+    if (!selected) return;
+    setRouteForm((current) => ({
+      ...current,
+      apiKeyModelId: selected.id,
+      upstreamModel: selected.upstreamModel,
+      providerId: selected.modelProviderId || current.providerId,
+    }));
+  }, [routeForm.apiKeyModelId, routeForm.upstreamModel, routeKeyModels]);
 
   useEffect(() => {
     if (!notice) return;
@@ -346,6 +467,7 @@ export function PlatformModelsPanel() {
   }, [presets, routeForm.providerId, routeForm.upstreamModel, selectedModel?.model, selectedRouteKey?.providerId]);
 
   const setCapabilities = (next: ModelCapabilities) => {
+    setAppliedCapabilityTemplate('手动编辑');
     setModelForm((current) => ({
       ...current,
       capabilitiesJson: stringifyCapabilities(cleanEmptySections(next)),
@@ -361,7 +483,9 @@ export function PlatformModelsPanel() {
       capabilitiesJson: stringifyCapabilities(preset.capabilities),
       model: current.model || preset.modelPattern.replace(/\*+$/, ''),
     }));
-    setNotice('已套用能力预设，请按模型文档确认限制');
+    setAppliedCapabilityTemplate(preset.label || `${preset.providerId} ${preset.modelPattern}`);
+    setShowAdvancedCapabilities(true);
+    setNotice('已套用能力模板，请按模型文档确认限制并保存');
   };
 
   const copyRouteCapabilities = () => {
@@ -374,13 +498,18 @@ export function PlatformModelsPanel() {
       capability: capabilityFromCapabilities(capabilityPreview.capabilities),
       capabilitiesJson: stringifyCapabilities(capabilityPreview.capabilities),
     }));
-    setNotice('已复制当前路由推断能力');
+    setAppliedCapabilityTemplate('当前路由推断');
+    setShowAdvancedCapabilities(true);
+    setNotice('已复制当前路由推断能力，请确认后保存');
   };
 
   const startNewModel = () => {
     setSelectedModelId('');
+    setActiveView('details');
     setModelForm(emptyModelForm);
     setRouteForm(emptyRouteForm);
+    setShowAdvancedCapabilities(false);
+    setAppliedCapabilityTemplate('');
     setModelSaveState('idle');
     setModelSaveMessage('');
     setRouteSaveState('idle');
@@ -426,6 +555,7 @@ export function PlatformModelsPanel() {
       setNotice('平台模型已保存');
       setModelSaveState('saved');
       setModelSaveMessage('平台模型已保存');
+      setAppliedCapabilityTemplate('');
       setSelectedModelId(model.id);
       await loadData();
     } catch (err) {
@@ -475,6 +605,7 @@ export function PlatformModelsPanel() {
       await proxyAdminSavePlatformModelRoute(selectedModel.id, {
         id: routeForm.id || undefined,
         apiKeyId: routeForm.apiKeyId,
+        apiKeyModelId: routeForm.apiKeyModelId,
         providerId: routeForm.providerId,
         upstreamModel: routeForm.upstreamModel || selectedModel.model,
         priority: Number(routeForm.priority || 100),
@@ -512,9 +643,55 @@ export function PlatformModelsPanel() {
     setRouteForm((current) => ({
       ...current,
       apiKeyId,
+      apiKeyModelId: '',
       providerId: key?.providerId || current.providerId,
-      upstreamModel: current.upstreamModel || firstModel || selectedModel?.model || '',
+      upstreamModel: firstModel || selectedModel?.model || '',
     }));
+  };
+
+  const selectBulkServerKey = (apiKeyId: string) => {
+    setBulkKeyId(apiKeyId);
+    setBulkSelectedModels([]);
+  };
+
+  const toggleBulkModel = (model: string) => {
+    setBulkSelectedModels((current) =>
+      current.includes(model)
+        ? current.filter((item) => item !== model)
+        : [...current, model]
+    );
+  };
+
+  const createModelsFromKey = async () => {
+    if (!bulkKeyId) {
+      setError('请选择服务器 Key');
+      return;
+    }
+    if (bulkSelectedModels.length === 0) {
+      setError('请至少勾选一个上游模型');
+      return;
+    }
+
+    setBulkCreating(true);
+    setError('');
+    try {
+      const result = await proxyAdminCreatePlatformModelsFromKey({
+        apiKeyId: bulkKeyId,
+        capability: bulkCapability,
+        apiKeyModelIds: bulkSelectedModels,
+      });
+      setNotice(`已创建 ${result.count.created} 个平台模型，跳过 ${result.count.skipped} 个已绑定模型`);
+      setBulkSelectedModels([]);
+      if (result.created[0]?.model?.id) {
+        setSelectedModelId(result.created[0].model.id);
+        setActiveView('details');
+      }
+      await loadData();
+    } catch (err) {
+      setError(toErrorMessage(err, '从服务器 Key 生成平台模型失败'));
+    } finally {
+      setBulkCreating(false);
+    }
   };
 
   return (
@@ -535,13 +712,24 @@ export function PlatformModelsPanel() {
           <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
           刷新
         </button>
-        <PanelButton
+        <button
+          type="button"
           onClick={startNewModel}
+          className="inline-flex items-center gap-1.5 rounded-md border border-panel-border px-3 py-2 text-xs text-gray-300 hover:border-accent hover:text-accent"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          新建空模型
+        </button>
+        <PanelButton
+          onClick={() => {
+            setActiveView('publish');
+            setError('');
+          }}
           variant="primary"
           size="md"
         >
           <Plus className="h-3.5 w-3.5" />
-          新建平台模型
+          发布服务器模型
         </PanelButton>
       </div>
 
@@ -549,7 +737,11 @@ export function PlatformModelsPanel() {
       {error && <div className="rounded-md border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">{error}</div>}
 
       <div className="grid gap-4 xl:grid-cols-[320px_1fr]">
-        <div className="overflow-hidden rounded-lg border border-panel-border">
+        <div className="overflow-hidden rounded-lg border border-panel-border bg-canvas-bg/40">
+          <div className="border-b border-panel-border px-3 py-2">
+            <div className="text-xs font-medium text-gray-200">平台模型</div>
+            <div className="mt-1 text-[10px] text-gray-500">工作台只展示这里发布且启用的服务器模型。</div>
+          </div>
           {models.length === 0 ? (
             <div className="px-3 py-8 text-center text-xs text-gray-500">暂无平台模型</div>
           ) : (
@@ -557,26 +749,28 @@ export function PlatformModelsPanel() {
               <button
                 key={model.id}
                 type="button"
-                onClick={() => setSelectedModelId(model.id)}
+                onClick={() => {
+                  setSelectedModelId(model.id);
+                  setActiveView('details');
+                  setError('');
+                }}
                 className={cn(
                   'flex w-full items-start gap-2 border-b border-panel-border bg-canvas-bg/50 px-3 py-3 text-left last:border-b-0 hover:bg-white/5',
-                  selectedModelId === model.id && 'bg-accent/10'
+                  selectedModelId === model.id && activeView !== 'publish' && 'bg-accent/10'
                 )}
               >
                 <Bot className="mt-0.5 h-4 w-4 shrink-0 text-accent" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-xs font-medium text-white">{model.displayName}</span>
-                  <span className="mt-1 block truncate text-[10px] text-gray-500">{model.model}</span>
-                  <span className="mt-1 flex flex-wrap gap-1">
+                  <span className="mt-1 block truncate text-[10px] text-gray-500">{routeSummary(model)}</span>
+                  <span className="mt-2 flex flex-wrap gap-1">
                     <span className="rounded bg-panel-bg px-1.5 py-0.5 text-[9px] text-gray-400">{capabilityOptions.find((item) => item.value === model.capability)?.label || model.capability}</span>
-                    <span className={cn('rounded px-1.5 py-0.5 text-[9px]', model.isEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300')}>
-                      {model.isEnabled ? '已启用' : '已禁用'}
-                    </span>
                     <span className="rounded bg-panel-bg px-1.5 py-0.5 text-[9px] text-gray-400">{model.routes?.length || 0} 路由</span>
-                    <span className="rounded bg-panel-bg px-1.5 py-0.5 text-[9px] text-gray-400">{CAPABILITY_SOURCE_LABELS[model.capabilitySource || ''] || '能力未声明'}</span>
-                    {Boolean(model.capabilityWarnings?.length) && (
-                      <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[9px] text-amber-300">需检查能力</span>
-                    )}
+                    {modelStatusBadges(model).map((badge) => (
+                      <span key={badge.label} className={cn('rounded px-1.5 py-0.5 text-[9px]', badgeClassName(badge.tone))}>
+                        {badge.label}
+                      </span>
+                    ))}
                   </span>
                 </span>
               </button>
@@ -584,176 +778,338 @@ export function PlatformModelsPanel() {
           )}
         </div>
 
-        <div className="grid gap-4 2xl:grid-cols-[minmax(360px,0.9fr)_minmax(420px,1.1fr)]">
-          <section className="space-y-3 rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
-            <div className="text-xs font-medium text-gray-300">平台模型信息</div>
-            <Input label="展示名称" value={modelForm.displayName} onChange={(value) => setModelForm((current) => ({ ...current, displayName: value }))} placeholder="例如 image2.0" />
-            <Select
-              label="能力类型"
-              value={modelForm.capability}
-              onChange={(value) => setModelForm((current) => ({ ...current, capability: value as ProxyPlatformModelCapability }))}
-              options={capabilityOptions}
-            />
-            <Input label="默认模型名" value={modelForm.model} onChange={(value) => setModelForm((current) => ({ ...current, model: value }))} placeholder="例如 gpt-image-1" />
-            <Input label="描述" value={modelForm.description} onChange={(value) => setModelForm((current) => ({ ...current, description: value }))} placeholder="给工作台展示的说明" />
-            <Input label="排序" type="number" value={String(modelForm.sortOrder)} onChange={(value) => setModelForm((current) => ({ ...current, sortOrder: Number(value || 100) }))} />
-            <SwitchRow label="启用平台模型" checked={modelForm.isEnabled} onChange={(value) => setModelForm((current) => ({ ...current, isEnabled: value }))} />
-            <div className="space-y-3 rounded-lg border border-panel-border bg-panel-bg/60 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <div className="text-xs font-medium text-gray-300">能力配置</div>
-                  <div className="mt-1 text-[10px] text-gray-500">这里保存平台覆盖项；不填则使用路由自动推断，再按模型文档微调。</div>
-                </div>
-                {selectedModel && (
-                  <span className="rounded bg-canvas-bg px-2 py-1 text-[10px] text-gray-400">
-                    当前：{CAPABILITY_SOURCE_LABELS[visibleCapabilitySource] || '能力未声明'}
-                  </span>
-                )}
+        {activeView === 'publish' ? (
+          <section className="space-y-4 rounded-lg border border-panel-border bg-canvas-bg/60 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-white">发布服务器模型</div>
+                <div className="mt-1 text-xs text-gray-500">从某个服务器 Key 的已保存模型列表批量生成平台模型，并自动绑定默认主路由。</div>
               </div>
-              {selectedModel?.capabilityWarnings?.length ? (
-                <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[10px] leading-4 text-amber-200">
-                  {selectedModel.capabilityWarnings.join('；')}
-                </div>
-              ) : null}
-              <div className="grid gap-2 md:grid-cols-[1fr_auto]">
-                <Select
-                  label="从预设填充"
-                  value=""
-                  onChange={applyPreset}
-                  options={presetOptions}
-                />
-                <button
-                  type="button"
-                  onClick={copyRouteCapabilities}
-                  className="self-end rounded-md border border-panel-border px-3 py-1.5 text-xs text-gray-300 hover:border-accent hover:text-accent"
-                >
-                  复制当前路由推断
-                </button>
-              </div>
-              <CapabilityPreview preview={capabilityPreview} loading={capabilityPreviewLoading} error={capabilityPreviewError} notice={capabilityPreviewNotice} />
-              <CapabilityEditor
-                capability={modelForm.capability}
-                capabilities={parsedCapabilities}
-                onChange={setCapabilities}
-              />
               <button
                 type="button"
-                onClick={() => setShowAdvancedCapabilities((current) => !current)}
-                className="text-[10px] text-gray-500 hover:text-accent"
+                onClick={() => setActiveView('details')}
+                className="rounded-md border border-panel-border px-3 py-1.5 text-xs text-gray-300 hover:border-accent hover:text-accent"
               >
-                {showAdvancedCapabilities ? '收起高级 JSON' : '展开高级 JSON'}
-              </button>
-              {showAdvancedCapabilities && (
-                <label className="block space-y-1">
-                  <span className="text-[10px] text-gray-500">能力限制 JSON</span>
-                  <textarea
-                    value={modelForm.capabilitiesJson}
-                    onChange={(event) => setModelForm((current) => ({ ...current, capabilitiesJson: event.target.value }))}
-                    rows={8}
-                    className="w-full resize-y rounded-md border border-panel-border bg-canvas-bg px-2.5 py-2 font-mono text-[11px] leading-5 text-gray-200 focus:border-accent focus:outline-none"
-                    spellCheck={false}
-                  />
-                </label>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <SaveActionButton
-                className="flex-1"
-                onClick={() => void saveModel()}
-                disabled={savingModel}
-                saving={savingModel}
-                state={modelSaveState}
-              >
-                保存平台模型
-              </SaveActionButton>
-              {selectedModel && (
-                <button
-                  onClick={() => void deleteModel(selectedModel)}
-                  className="inline-flex items-center justify-center gap-1.5 rounded-md border border-red-500/30 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                  删除
-                </button>
-              )}
-            </div>
-            <ActionFeedback message={modelSaveMessage} state={modelSaveState} />
-          </section>
-
-          <section className="space-y-3 rounded-lg border border-panel-border bg-canvas-bg/60 p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <div className="text-xs font-medium text-gray-300">服务器 Key 路由</div>
-                <div className="mt-1 text-[10px] text-gray-500">普通工作台不会看到这些路由，只会看到平台模型。</div>
-              </div>
-              <button
-                onClick={() => setRouteForm({
-                  ...emptyRouteForm,
-                  apiKeyId: serverKeys[0]?.id || '',
-                  providerId: serverKeys[0]?.providerId || '',
-                  upstreamModel: serverKeys[0]?.models?.find(Boolean) || selectedModel?.model || '',
-                })}
-                className="rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-300 hover:border-accent hover:text-accent"
-              >
-                新路由
+                返回模型详情
               </button>
             </div>
 
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-2">
               <Select
                 label="服务器 Key"
-                value={routeForm.apiKeyId}
-                onChange={selectServerKey}
+                value={bulkKeyId}
+                onChange={selectBulkServerKey}
                 options={serverKeys.map((key) => ({ label: key.name || key.providerId, value: key.id }))}
               />
-              <Input label="Provider" value={routeForm.providerId} onChange={(value) => setRouteForm((current) => ({ ...current, providerId: value }))} placeholder="默认用 Key 的 provider" />
-              <ModelPicker
-                apiKeyName={selectedRouteKey?.name || selectedRouteKey?.providerId || ''}
-                label="上游模型名"
-                models={selectedRouteKeyModels}
-                value={routeForm.upstreamModel}
-                onChange={(value) => setRouteForm((current) => ({ ...current, upstreamModel: value }))}
-                placeholder={selectedModel?.model || '例如 gpt-image-1'}
+              <Select
+                label="能力类型"
+                value={bulkCapability}
+                onChange={(value) => {
+                  setBulkCapability(value as ProxyPlatformModelCapability);
+                  setBulkSelectedModels([]);
+                }}
+                options={capabilityOptions}
               />
-              <Input label="优先级" type="number" value={String(routeForm.priority)} onChange={(value) => setRouteForm((current) => ({ ...current, priority: Number(value || 100) }))} />
             </div>
-            <SwitchRow label="启用这条路由" checked={routeForm.isEnabled} onChange={(value) => setRouteForm((current) => ({ ...current, isEnabled: value }))} />
-            <SaveActionButton
-              onClick={() => void saveRoute()}
-              disabled={savingRoute || !selectedModel}
-              saving={savingRoute}
-              state={routeSaveState}
-            >
-              保存路由
-            </SaveActionButton>
-            <ActionFeedback message={routeSaveMessage} state={routeSaveState} />
 
-            <div className="overflow-hidden rounded-lg border border-panel-border">
-              {!selectedModel?.routes?.length ? (
-                <div className="px-3 py-8 text-center text-xs text-gray-500">暂无路由</div>
+            <div className="rounded-lg border border-panel-border bg-panel-bg">
+              <div className="flex items-center justify-between gap-2 border-b border-panel-border px-3 py-2">
+                <span className="text-xs text-gray-300">
+                  {selectedBulkKey ? `${selectedBulkKey.name || selectedBulkKey.providerId} 保存的模型` : '请选择服务器 Key'}
+                </span>
+                <div className="flex gap-1">
+                  <SmallButton
+                    disabled={selectedBulkKeyModels.length === 0}
+                    onClick={() => setBulkSelectedModels(selectedBulkKeyModels.map((model) => model.id))}
+                  >
+                    全选
+                  </SmallButton>
+                  <SmallButton
+                    disabled={bulkSelectedModels.length === 0}
+                    onClick={() => setBulkSelectedModels([])}
+                  >
+                    清空
+                  </SmallButton>
+                </div>
+              </div>
+              {selectedBulkKeyModels.length === 0 ? (
+                <div className="px-3 py-10 text-center text-xs text-gray-500">这个 Key 没有已启用的此类模型。请切换能力类型，或先到服务器 Key 页面发现并启用模型。</div>
               ) : (
-                selectedModel.routes.map((route) => (
-                  <div key={route.id} className="grid grid-cols-[1fr_auto] gap-3 border-b border-panel-border bg-panel-bg/50 px-3 py-2 last:border-b-0">
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium text-white">{route.apiKey?.name || route.apiKeyId}</div>
-                      <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-gray-500">
-                        <span className="rounded bg-canvas-bg px-1.5 py-0.5">{route.providerId || route.apiKey?.providerId}</span>
-                        <span className="rounded bg-canvas-bg px-1.5 py-0.5">{route.upstreamModel || selectedModel.model}</span>
-                        <span className="rounded bg-canvas-bg px-1.5 py-0.5">优先级 {route.priority}</span>
-                        <span className={cn('rounded px-1.5 py-0.5', route.isEnabled && route.apiKey?.isEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300')}>
-                          {route.isEnabled && route.apiKey?.isEnabled ? '可用' : '不可用'}
+                <div className="grid max-h-[420px] gap-1 overflow-auto p-2 md:grid-cols-2">
+                  {selectedBulkKeyModels.map((model) => {
+                    const checked = bulkSelectedModels.includes(model.id);
+                    return (
+                      <button
+                        key={model.id}
+                        type="button"
+                        onClick={() => toggleBulkModel(model.id)}
+                        className={cn(
+                          'flex items-center gap-2 rounded-md border border-transparent px-2.5 py-2 text-left text-xs text-gray-300 hover:bg-white/5',
+                          checked && 'border-accent/30 bg-accent/10 text-accent'
+                        )}
+                      >
+                        <span className={cn(
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                          checked ? 'border-accent bg-accent text-white' : 'border-panel-border bg-canvas-bg'
+                        )}>
+                          {checked ? '✓' : ''}
                         </span>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <SmallButton onClick={() => setRouteForm(routeToForm(route))}>编辑</SmallButton>
-                      <SmallButton danger onClick={() => void deleteRoute(route)}>删除</SmallButton>
-                    </div>
-                  </div>
-                ))
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate">{model.displayName || model.upstreamModel}</span>
+                          <span className="mt-0.5 block truncate text-[9px] text-gray-500">{model.adapterId} · {model.upstreamModel}</span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               )}
             </div>
+
+            <button
+              type="button"
+              disabled={bulkCreating || bulkSelectedModels.length === 0}
+              onClick={() => void createModelsFromKey()}
+              className="inline-flex w-full items-center justify-center gap-1.5 rounded-md border border-accent/45 bg-accent/15 px-3 py-2 text-xs font-medium text-white hover:border-accent/70 hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {bulkCreating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              {bulkCreating ? '正在生成...' : `生成 ${bulkSelectedModels.length} 个平台模型`}
+            </button>
           </section>
-        </div>
+        ) : (
+          <section className="space-y-4 rounded-lg border border-panel-border bg-canvas-bg/60 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-white">{selectedModel ? selectedModel.displayName : '新建平台模型'}</div>
+                <div className="mt-1 text-xs text-gray-500">
+                  {selectedModel ? '先维护基础信息，再按需管理路由和能力限制。' : '先保存基础信息，保存后才能绑定路由和配置能力。'}
+                </div>
+              </div>
+              <div className="flex rounded-lg border border-panel-border bg-panel-bg p-1">
+                {workspaceTabs.map((tab) => {
+                  const disabled = !selectedModel && tab.value !== 'details';
+                  return (
+                    <button
+                      key={tab.value}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => setActiveView(tab.value)}
+                      className={cn(
+                        'rounded-md px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                        activeView === tab.value ? 'bg-accent/20 text-white' : 'text-gray-400 hover:text-white'
+                      )}
+                    >
+                      {tab.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {activeView === 'details' && (
+              <div className="space-y-3">
+                <div className="grid gap-3 lg:grid-cols-2">
+                  <Input label="展示名称" value={modelForm.displayName} onChange={(value) => setModelForm((current) => ({ ...current, displayName: value }))} placeholder="例如 image2.0" />
+                  <Select
+                    label="能力类型"
+                    value={modelForm.capability}
+                    onChange={(value) => setModelForm((current) => ({ ...current, capability: value as ProxyPlatformModelCapability }))}
+                    options={capabilityOptions}
+                  />
+                  <Input label="平台模型标识 / 默认上游模型" value={modelForm.model} onChange={(value) => setModelForm((current) => ({ ...current, model: value }))} placeholder="例如 gpt-image-1" />
+                  <Input label="排序" type="number" value={String(modelForm.sortOrder)} onChange={(value) => setModelForm((current) => ({ ...current, sortOrder: Number(value || 100) }))} />
+                </div>
+                <Input label="描述" value={modelForm.description} onChange={(value) => setModelForm((current) => ({ ...current, description: value }))} placeholder="给工作台展示的说明" />
+                <SwitchRow label="启用平台模型" checked={modelForm.isEnabled} onChange={(value) => setModelForm((current) => ({ ...current, isEnabled: value }))} />
+                <div className="flex gap-2">
+                  <SaveActionButton
+                    className="flex-1"
+                    onClick={() => void saveModel()}
+                    disabled={savingModel}
+                    saving={savingModel}
+                    state={modelSaveState}
+                  >
+                    保存平台模型
+                  </SaveActionButton>
+                  {selectedModel && (
+                    <button
+                      onClick={() => void deleteModel(selectedModel)}
+                      className="inline-flex items-center justify-center gap-1.5 rounded-md border border-red-500/30 px-3 py-2 text-xs text-red-300 hover:bg-red-500/10"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      删除
+                    </button>
+                  )}
+                </div>
+                <ActionFeedback message={modelSaveMessage} state={modelSaveState} />
+              </div>
+            )}
+
+            {activeView === 'routes' && selectedModel && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs font-medium text-gray-300">路由管理</div>
+                    <div className="mt-1 text-[10px] text-gray-500">普通工作台不会看到这些路由，只会看到平台模型。</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRouteForm({
+                      ...emptyRouteForm,
+                      apiKeyId: serverKeys[0]?.id || '',
+                      apiKeyModelId: '',
+                      providerId: serverKeys[0]?.providerId || '',
+                      upstreamModel: serverKeys[0]?.models?.find(Boolean) || selectedModel.model || '',
+                    })}
+                    className="rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-300 hover:border-accent hover:text-accent"
+                  >
+                    新路由
+                  </button>
+                </div>
+
+                <div className="grid gap-2 md:grid-cols-2">
+                  <Select
+                    label="服务器 Key"
+                    value={routeForm.apiKeyId}
+                    onChange={selectServerKey}
+                    options={serverKeys.map((key) => ({ label: key.name || key.providerId, value: key.id }))}
+                  />
+                  <Input label="Provider" value={routeForm.providerId} onChange={(value) => setRouteForm((current) => ({ ...current, providerId: value }))} placeholder="默认用 Key 的 provider" />
+                  <ModelPicker
+                    apiKeyName={selectedRouteKey?.name || selectedRouteKey?.providerId || ''}
+                    label="上游模型名"
+                    models={selectedRouteKeyModels.map((model) => model.upstreamModel)}
+                    value={routeForm.upstreamModel}
+                    onChange={(value) => setRouteForm((current) => ({
+                      ...current,
+                      upstreamModel: value,
+                      apiKeyModelId: selectedRouteKeyModels.find((model) => model.upstreamModel === value)?.id || '',
+                    }))}
+                    placeholder={selectedModel.model || '例如 gpt-image-1'}
+                  />
+                  <Input label="优先级" type="number" value={String(routeForm.priority)} onChange={(value) => setRouteForm((current) => ({ ...current, priority: Number(value || 100) }))} />
+                </div>
+                <SwitchRow label="启用这条路由" checked={routeForm.isEnabled} onChange={(value) => setRouteForm((current) => ({ ...current, isEnabled: value }))} />
+                <SaveActionButton
+                  onClick={() => void saveRoute()}
+                  disabled={savingRoute}
+                  saving={savingRoute}
+                  state={routeSaveState}
+                >
+                  保存路由
+                </SaveActionButton>
+                <ActionFeedback message={routeSaveMessage} state={routeSaveState} />
+
+                <div className="overflow-hidden rounded-lg border border-panel-border">
+                  {!selectedModel.routes?.length ? (
+                    <div className="px-3 py-8 text-center text-xs text-gray-500">暂无路由</div>
+                  ) : (
+                    selectedModel.routes.map((route) => (
+                      <div key={route.id} className="grid grid-cols-[1fr_auto] gap-3 border-b border-panel-border bg-panel-bg/50 px-3 py-2 last:border-b-0">
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-medium text-white">{route.apiKey?.name || route.apiKeyId}</div>
+                          <div className="mt-1 text-[10px] text-gray-500">实际调用模型</div>
+                          <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-gray-500">
+                            <span className="rounded bg-canvas-bg px-1.5 py-0.5">{route.providerId || route.apiKey?.providerId}</span>
+                            <span className="rounded bg-canvas-bg px-1.5 py-0.5">{route.upstreamModel || selectedModel.model}</span>
+                            <span className="rounded bg-canvas-bg px-1.5 py-0.5">优先级 {route.priority}</span>
+                            <span className={cn('rounded px-1.5 py-0.5', route.isEnabled && route.apiKey?.isEnabled ? 'bg-emerald-500/15 text-emerald-300' : 'bg-red-500/15 text-red-300')}>
+                              {route.isEnabled && route.apiKey?.isEnabled ? '可用' : '不可用'}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <SmallButton onClick={() => setRouteForm(routeToForm(route))}>编辑</SmallButton>
+                          <SmallButton danger onClick={() => void deleteRoute(route)}>删除</SmallButton>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeView === 'capabilities' && selectedModel && (
+              <div className="space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-medium text-gray-300">能力限制</div>
+                    <div className="mt-1 text-[10px] text-gray-500">先看自动推断。只有未命中、推断错误，或模型文档限制不同，才需要套用模板或手动覆盖。</div>
+                  </div>
+                  <span className="rounded bg-panel-bg px-2 py-1 text-[10px] text-gray-400">
+                    当前：{CAPABILITY_SOURCE_LABELS[visibleCapabilitySource] || '能力未声明'}
+                  </span>
+                </div>
+                <div className="rounded-md border border-blue-500/20 bg-blue-500/10 px-3 py-2 text-[10px] leading-4 text-blue-100">
+                  如果下方自动推断显示的类型和限制正确，就不用选择模板。模板只是快速写入覆盖项，用于新模型未命中规则或文档限制需要修正时。
+                </div>
+                {selectedModel.capabilityWarnings?.length ? (
+                  <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[10px] leading-4 text-amber-200">
+                    {selectedModel.capabilityWarnings.join('；')}
+                  </div>
+                ) : null}
+                <CapabilityPreview preview={capabilityPreview} loading={capabilityPreviewLoading} error={capabilityPreviewError} notice={capabilityPreviewNotice} />
+                <div className="grid gap-2 md:grid-cols-[1fr_auto]">
+                  <Select
+                    label="高级：套用能力模板"
+                    value=""
+                    onChange={applyPreset}
+                    options={presetOptions}
+                  />
+                  <button
+                    type="button"
+                    onClick={copyRouteCapabilities}
+                    className="self-end rounded-md border border-panel-border px-3 py-1.5 text-xs text-gray-300 hover:border-accent hover:text-accent"
+                  >
+                    把自动推断保存为覆盖
+                  </button>
+                </div>
+                {appliedCapabilityTemplate && (
+                  <div className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-[10px] text-emerald-200">
+                    当前待保存覆盖来源：{appliedCapabilityTemplate}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowAdvancedCapabilities((current) => !current)}
+                  className="text-[10px] text-gray-500 hover:text-accent"
+                >
+                  {showAdvancedCapabilities ? '收起手动覆盖表单' : '展开手动覆盖表单'}
+                </button>
+                {showAdvancedCapabilities && (
+                  <div className="space-y-3">
+                    <CapabilityEditor
+                      capability={modelForm.capability}
+                      capabilities={parsedCapabilities}
+                      onChange={setCapabilities}
+                    />
+                    <label className="block space-y-1">
+                      <span className="text-[10px] text-gray-500">能力限制 JSON</span>
+                      <textarea
+                        value={modelForm.capabilitiesJson}
+                        onChange={(event) => {
+                          setAppliedCapabilityTemplate('手动编辑 JSON');
+                          setModelForm((current) => ({ ...current, capabilitiesJson: event.target.value }));
+                        }}
+                        rows={8}
+                        className="w-full resize-y rounded-md border border-panel-border bg-canvas-bg px-2.5 py-2 font-mono text-[11px] leading-5 text-gray-200 focus:border-accent focus:outline-none"
+                        spellCheck={false}
+                      />
+                    </label>
+                  </div>
+                )}
+                <SaveActionButton
+                  onClick={() => void saveModel()}
+                  disabled={savingModel}
+                  saving={savingModel}
+                  state={modelSaveState}
+                >
+                  保存能力覆盖
+                </SaveActionButton>
+                <ActionFeedback message={modelSaveMessage} state={modelSaveState} />
+              </div>
+            )}
+          </section>
+        )}
       </div>
     </section>
   );

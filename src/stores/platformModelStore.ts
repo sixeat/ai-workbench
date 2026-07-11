@@ -24,7 +24,23 @@ function nodeCapability(type: NodeType): ProxyPlatformModelCapability | null {
 
 export function platformModelSupportsNode(model: ProxyPlatformModel, type: NodeType): boolean {
   const capability = nodeCapability(type);
-  return Boolean(capability && model.isEnabled && model.capability === capability);
+  if (!capability || !model.isEnabled || model.capability !== capability) return false;
+  const capabilities = model.capabilities || {};
+  if (['textModel', 'script', 'shotSplit', 'promptOptimize'].includes(type)) {
+    return capabilities.chat !== false;
+  }
+  if (type === 'imageGen') return capabilities.imageGeneration !== false;
+  if (type === 'imageToImage') {
+    return Boolean(capabilities.imageGeneration && capabilities.imageReference);
+  }
+  if (type === 'videoGen') return capabilities.videoGeneration !== false;
+  if (type === 'multiImageVideo') {
+    return Boolean(
+      capabilities.videoGeneration
+      && (capabilities.multiImageReference || Number(capabilities.video?.maxReferenceImages || 0) > 1)
+    );
+  }
+  return false;
 }
 
 export const usePlatformModelStore = create<PlatformModelStoreState & PlatformModelStoreActions>()((set, get) => ({

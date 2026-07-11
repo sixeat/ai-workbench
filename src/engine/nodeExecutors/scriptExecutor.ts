@@ -55,7 +55,7 @@ export async function executeScript(
       text: content,
       task: result.task,
       modelContext: makeModelContext(
-        { instanceId: resolved.instanceId, platformModelId: resolved.platformModelId, model: resolved.model },
+        { instanceId: resolved.instanceId, apiKeyModelId: resolved.apiKeyModelId, platformModelId: resolved.platformModelId, model: resolved.model },
         { sourceNodeType: 'script' }
       ),
       modelSourceUsed: resolved.source,

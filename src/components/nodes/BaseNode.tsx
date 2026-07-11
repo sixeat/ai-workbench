@@ -31,6 +31,7 @@ import { isSelectableImageAsset } from '../../lib/imageAssetSelection';
 import { clearImageInputConfig, imageInputConfigFromAsset } from '../../lib/imageInputConfig';
 import { loadCachedModelCapabilities } from '../../lib/modelCapabilityCache';
 import { resolveModelCapabilities, summarizeModelCapabilityBadges } from '../../lib/modelCapabilities';
+import { personalModelSupportsNode } from '../../lib/modelCatalog';
 import { isNodeRunImageAsset } from '../../lib/nodeRunDisplay';
 import {
   proxyAddAssetToCollection,
@@ -51,9 +52,10 @@ import { useApiStore } from '../../stores/apiStore';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { useImagePreviewStore } from '../../stores/imagePreviewStore';
 import { platformModelSupportsNode, usePlatformModelStore } from '../../stores/platformModelStore';
+import { useModelCatalogStore } from '../../stores/modelCatalogStore';
 import { NODE_COLORS, type NodeRunAssetSummary, type NodeRunSummary as NodeRunSummaryData, type NodeType } from '../../types/nodes';
 import { ImageInputNodeBody } from './ImageInputNodeBody';
-import { NodeModelSelector } from './NodeModelSelector';
+import { NodeModelSelector, type CustomModelOption } from './NodeModelSelector';
 import { NodePreviewContent } from './NodePreviewContent';
 import { NodeRunSummary } from './NodeRunSummary';
 import { NodeHeader } from './NodeHeader';
@@ -299,11 +301,15 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   const editableField = getEditableField(data.type);
   const hasModelSelector = ['textModel', 'imageGen', 'imageToImage', 'videoGen', 'multiImageVideo'].includes(data.type);
 
-  const { updateNodeData, setSelectedNodeId } = useCanvasStore();
+  const { updateNodeData, setSelectedNodeId, toggleSelectedNodeId } = useCanvasStore();
   const { instances } = useApiStore();
-  const { loadPlatformModels, models: platformModels } = usePlatformModelStore();
+  const { loadPlatformModels, models: legacyPlatformModels } = usePlatformModelStore();
+  const {
+    loadCatalog,
+    personalModels,
+    platformModels: catalogPlatformModels,
+  } = useModelCatalogStore();
   const { openPreview } = useImagePreviewStore();
-  const [showInstanceSelect, setShowInstanceSelect] = useState(false);
   const [showModelSelect, setShowModelSelect] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -323,7 +329,9 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   const [taskRefreshNotice, setTaskRefreshNotice] = useState('');
   const [taskRefreshError, setTaskRefreshError] = useState('');
 
+  const platformModels = catalogPlatformModels.length > 0 ? catalogPlatformModels : legacyPlatformModels;
   const selectedPlatformModel = platformModels.find((model) => model.id === data.config.platformModelId) || null;
+  const selectedPersonalModel = personalModels.find((model) => model.id === data.config.apiKeyModelId) || null;
   const selectedInstanceId = String(data.config.instanceId || '');
   const selectedInstance = data.config.modelSource === 'platform' || selectedInstanceId.startsWith('server:')
     ? null
@@ -342,24 +350,47 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     return platformModels.filter((model) => platformModelSupportsNode(model, data.type));
   }, [data.type, hasModelSelector, platformModels]);
 
-  const availableModels = useMemo(() => {
-    if (!selectedInstance) return [];
-    const instanceModels = selectedInstance.models || [];
-    if (instanceModels.length > 0) return rankModelsForNode(data.type, instanceModels);
-    return rankModelsForNode(data.type, getProviderDefaultModels(selectedInstance.providerId));
-  }, [selectedInstance, data.type]);
+  const availableCustomModels = useMemo<CustomModelOption[]>(() => {
+    const options: CustomModelOption[] = personalModels
+      .filter((model) => personalModelSupportsNode(model, data.type))
+      .map((model) => ({
+        apiKeyModelId: model.id,
+        instanceId: `user:${model.apiKeyId}`,
+        instanceName: model.apiKey?.name || model.apiKey?.providerId || '我的 API',
+        model: model.upstreamModel,
+        providerId: model.modelProviderId,
+      }));
+    const catalogPairs = new Set(options.map((option) => `${option.instanceId}:${option.model}`));
+    for (const instance of availableInstances) {
+      const sourceModels = instance.models?.length ? instance.models : getProviderDefaultModels(instance.providerId);
+      for (const model of rankModelsForNode(data.type, sourceModels)) {
+        if (catalogPairs.has(`${instance.id}:${model}`)) continue;
+        options.push({
+          instanceId: instance.id,
+          instanceName: instance.name,
+          model,
+          providerId: instance.providerId,
+        });
+      }
+    }
+    return options;
+  }, [availableInstances, data.type, personalModels]);
 
   const capabilityBadges = useMemo(() => {
     if (hasModelCapabilities(selectedPlatformModel?.capabilities)) {
       return summarizeModelCapabilityBadges(data.type, selectedPlatformModel.capabilities, 3);
     }
+    if (hasModelCapabilities(selectedPersonalModel?.capabilities)) {
+      return summarizeModelCapabilityBadges(data.type, selectedPersonalModel.capabilities, 3);
+    }
     const capabilities = resolveModelCapabilities(capabilityRecords, selectedInstance?.providerId, String(data.config.model || ''));
     return summarizeModelCapabilityBadges(data.type, capabilities, 3);
-  }, [capabilityRecords, data.config.model, data.type, selectedInstance?.providerId, selectedPlatformModel?.capabilities]);
+  }, [capabilityRecords, data.config.model, data.type, selectedInstance?.providerId, selectedPersonalModel?.capabilities, selectedPlatformModel?.capabilities]);
 
   useEffect(() => {
     if (!hasModelSelector) return;
     void loadPlatformModels();
+    void loadCatalog();
     let cancelled = false;
     loadCachedModelCapabilities()
       .then((records) => {
@@ -371,7 +402,7 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     return () => {
       cancelled = true;
     };
-  }, [hasModelSelector, loadPlatformModels]);
+  }, [hasModelSelector, loadCatalog, loadPlatformModels]);
 
   useEffect(() => {
     if (!runAssetNotice) return;
@@ -393,22 +424,24 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     [data.config, editableField, id, updateNodeData]
   );
 
-  const handleSelectInstance = useCallback(
-    (instanceId: string) => {
-      const instance = instances[instanceId];
-      const models = [...(instance?.models || []), ...getProviderDefaultModels(instance?.providerId || '')];
+  const handleSelectCustomModel = useCallback(
+    (option: CustomModelOption) => {
       updateNodeData(id, {
         config: {
           ...data.config,
           modelSource: 'custom',
           platformModelId: '',
-          instanceId,
-          model: rankModelsForNode(data.type, models)[0] || data.config.model || '',
+          apiKeyModelId: option.apiKeyModelId || '',
+          modelSelection: option.apiKeyModelId
+            ? { source: 'personal', apiKeyModelId: option.apiKeyModelId }
+            : undefined,
+          instanceId: option.instanceId,
+          model: option.model,
         },
       });
-      setShowInstanceSelect(false);
+      setShowModelSelect(false);
     },
-    [data.config, data.type, id, instances, updateNodeData]
+    [data.config, id, updateNodeData]
   );
 
   const handleSelectPlatformModel = useCallback(
@@ -419,22 +452,15 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
           ...data.config,
           modelSource: 'platform',
           platformModelId,
+          apiKeyModelId: '',
+          modelSelection: { source: 'platform', platformModelId },
           instanceId: '',
           model: model?.model || data.config.model || '',
         },
       });
-      setShowInstanceSelect(false);
       setShowModelSelect(false);
     },
     [data.config, id, platformModels, updateNodeData]
-  );
-
-  const handleSelectModel = useCallback(
-    (model: string) => {
-      updateNodeData(id, { config: { ...data.config, model } });
-      setShowModelSelect(false);
-    },
-    [data.config, id, updateNodeData]
   );
 
   const handleUploadImage = useCallback(
@@ -639,7 +665,13 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
 
   return (
     <div
-      onClick={() => setSelectedNodeId(id)}
+      onClick={(event) => {
+        if (event.shiftKey || event.ctrlKey || event.metaKey) {
+          toggleSelectedNodeId(id);
+        } else {
+          setSelectedNodeId(id);
+        }
+      }}
       className={cn(
         'group/node relative min-w-[240px] max-w-[330px] rounded-xl border bg-panel-bg shadow-lg transition-all duration-200',
         selected ? 'border-accent shadow-xl shadow-accent/20 ring-1 ring-accent/50' : 'border-panel-border hover:border-gray-600',
@@ -746,27 +778,19 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
 
       {hasModelSelector && (
         <NodeModelSelector
-          selectedInstance={selectedInstance}
           selectedPlatformModel={selectedPlatformModel}
-          availableInstances={availableInstances}
           availablePlatformModels={availablePlatformModels}
-          availableModels={availableModels}
+          availableCustomModels={availableCustomModels}
           selectedInstanceId={data.config.instanceId}
+          selectedApiKeyModelId={data.config.apiKeyModelId}
           selectedPlatformModelId={data.config.platformModelId}
           selectedModel={data.config.model}
-          showInstanceSelect={showInstanceSelect}
           showModelSelect={showModelSelect}
-          onToggleInstanceSelect={() => {
-            setShowInstanceSelect(!showInstanceSelect);
-            setShowModelSelect(false);
-          }}
           onToggleModelSelect={() => {
             setShowModelSelect(!showModelSelect);
-            setShowInstanceSelect(false);
           }}
-          onSelectInstance={handleSelectInstance}
+          onSelectCustomModel={handleSelectCustomModel}
           onSelectPlatformModel={handleSelectPlatformModel}
-          onSelectModel={handleSelectModel}
           capabilityBadges={capabilityBadges}
         />
       )}

@@ -3,6 +3,7 @@ import type { ExecutionLog } from '../types/workflow';
 
 export interface TextModelContext {
   instanceId?: string;
+  apiKeyModelId?: string;
   platformModelId?: string;
   model: string;
   providerId?: string;

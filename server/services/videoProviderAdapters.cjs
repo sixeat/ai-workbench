@@ -38,6 +38,27 @@ function normalizeArkContent(body, req) {
   return content;
 }
 
+function publicMediaReference(value, req) {
+  const raw = typeof value === 'string' ? value : value?.url || value?.file_id || value?.fileId || '';
+  const url = toPublicAssetUrl(req, raw);
+  if (!url) return null;
+  if (/^file_[a-z0-9_-]+$/i.test(url)) return { file_id: url };
+  return { url };
+}
+
+function contentText(content = []) {
+  const textItem = Array.isArray(content) ? content.find((item) => item?.type === 'text' && item.text) : null;
+  return String(textItem?.text || '').trim();
+}
+
+function contentImageReferences(content = [], req) {
+  if (!Array.isArray(content)) return [];
+  return content
+    .filter((item) => item?.type === 'image_url')
+    .map((item) => publicMediaReference(item.image_url?.url || item.url || '', req))
+    .filter(Boolean);
+}
+
 function normalizeBailianImageUrl(image, req) {
   if (!image) return '';
   return toPublicAssetUrl(req, typeof image === 'string' ? image : image.url || '');
@@ -106,7 +127,7 @@ function buildBailianContentForValidation(body) {
 }
 
 function summarizeVideoUpstream(data) {
-  const taskId = data?.id || data?.task_id || data?.taskId || data?.output?.task_id || data?.output?.id || data?.data?.id;
+  const taskId = data?.request_id || data?.requestId || data?.id || data?.task_id || data?.taskId || data?.output?.task_id || data?.output?.id || data?.data?.id;
   const status = data?.status || data?.task_status || data?.output?.task_status || data?.output?.status || data?.data?.status;
   return {
     ...(taskId ? { taskId: String(taskId) } : {}),
@@ -183,6 +204,33 @@ function commonArkBody(body, content) {
   };
 }
 
+function normalizeXaiResolution(value) {
+  const text = String(value || '').trim();
+  return text ? text.toLowerCase() : undefined;
+}
+
+function buildXaiVideoBody(originalBody, body, req) {
+  const references = contentImageReferences(body.content, req);
+  const prompt = contentText(body.content) || String(originalBody.prompt || originalBody.text || '').trim();
+  const requestBody = {
+    model: body.model,
+    prompt,
+  };
+  const mode = originalBody.mode || originalBody.__workbenchMode || '';
+
+  if (Number.isFinite(Number(body.duration))) requestBody.duration = Number(body.duration);
+  if (body.ratio) requestBody.aspect_ratio = body.ratio;
+  if (body.resolution) requestBody.resolution = normalizeXaiResolution(body.resolution);
+
+  if (references.length === 1 && mode === 'image-to-video') {
+    requestBody.image = references[0];
+  } else if (references.length > 0) {
+    requestBody.reference_images = references;
+  }
+
+  return requestBody;
+}
+
 const adapters = {
   seedance: {
     id: 'seedance',
@@ -254,15 +302,49 @@ const adapters = {
     normalizeStatus: normalizeVideoStatus,
     summarizeUpstream: summarizeVideoUpstream,
   },
+  xai: {
+    id: 'xai',
+    defaultBaseUrl(secrets = {}) {
+      return secrets.xaiBaseUrl || 'https://api.x.ai';
+    },
+    buildCapabilityBody({ body, req }) {
+      return commonArkBody(body, Array.isArray(body.content) ? body.content : normalizeArkContent(body, req));
+    },
+    buildCreateRequest({ originalBody, body, req, apiKey }) {
+      return {
+        endpoint: '/v1/videos/generations',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: buildXaiVideoBody(originalBody || {}, body, req),
+      };
+    },
+    buildQueryRequest({ taskId, apiKey }) {
+      return {
+        endpoint: `/v1/videos/${encodeURIComponent(taskId)}`,
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+      };
+    },
+    extractVideoUrl: findFirstVideoUrl,
+    normalizeStatus: normalizeVideoStatus,
+    summarizeUpstream: summarizeVideoUpstream,
+  },
 };
 
-function getVideoProviderAdapter(providerId) {
+function getVideoProviderAdapter(providerId, adapterId = '') {
+  if (adapterId === 'xai-video') return adapters.xai;
+  if (adapterId === 'dashscope-video') return adapters['aliyun-bailian'];
+  if (adapterId === 'seedance-video') return adapters.seedance;
   return adapters[providerId] || adapters.seedance;
 }
 
 module.exports = {
   buildBailianContentForValidation,
   buildBailianVideoBody,
+  buildXaiVideoBody,
   findFirstVideoUrl,
   getVideoProviderAdapter,
   normalizeArkContent,

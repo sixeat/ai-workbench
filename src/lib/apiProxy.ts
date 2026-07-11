@@ -1,4 +1,5 @@
 import type { NodeType } from '../types/nodes';
+import type { ApiKeyAllowedCapabilities } from '../types/api';
 import type { ModelCapabilities, ModelCapabilityRuleMatch, ModelCapabilitySource } from '../types/modelCapabilities';
 
 type ViteLikeEnv = Record<string, unknown>;
@@ -226,12 +227,43 @@ export interface ProxyApiKeyListResponse {
   };
 }
 
+export interface ProxyApiKeyModel {
+  id: string;
+  apiKeyId: string;
+  upstreamModel: string;
+  modelProviderId: string;
+  adapterId: string;
+  displayName: string;
+  capabilities: ModelCapabilities;
+  capabilitySource: ModelCapabilitySource;
+  isEnabled: boolean;
+  discoveryStatus: 'active' | 'missing' | 'unknown';
+  lastSeenAt?: string | null;
+  apiKey?: {
+    id: string;
+    name?: string;
+    providerId: string;
+    keyScope: string;
+    allowedCapabilities?: ApiKeyAllowedCapabilities;
+    isEnabled: boolean;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProxyModelCatalogResponse {
+  personalModels: ProxyApiKeyModel[];
+  platformModels: ProxyPlatformModel[];
+  count: number;
+}
+
 export type ProxyPlatformModelCapability = 'chat' | 'imageGeneration' | 'videoGeneration';
 
 export interface ProxyPlatformModelRoute {
   id: string;
   platformModelId: string;
   apiKeyId: string;
+  apiKeyModelId?: string;
   providerId: string;
   upstreamModel: string;
   priority: number;
@@ -243,6 +275,7 @@ export interface ProxyPlatformModelRoute {
     keyScope: string;
     isEnabled: boolean;
   };
+  apiKeyModel?: ProxyApiKeyModel;
   createdAt: string;
   updatedAt: string;
 }
@@ -277,6 +310,24 @@ export interface ProxyPlatformModelListResponse {
   total?: number;
   limit?: number;
   offset?: number;
+}
+
+export interface ProxyPlatformModelBulkFromKeyResponse {
+  count: {
+    created: number;
+    skipped: number;
+  };
+  created: Array<{
+    model: ProxyPlatformModel;
+    route: ProxyPlatformModelRoute;
+    upstreamModel: string;
+  }>;
+  skipped: Array<{
+    platformModelId?: string;
+    routeId?: string;
+    reason: string;
+    upstreamModel: string;
+  }>;
 }
 
 export interface ProxyApiKeyTestResult {
@@ -464,6 +515,7 @@ export interface ProxyRequest {
 
 export interface ProxyCredentialRef {
   apiKeyId?: string;
+  apiKeyModelId?: string;
   platformModelId?: string;
   providerId?: string;
 }
@@ -1395,6 +1447,45 @@ export async function proxyListPlatformModels(
   return data;
 }
 
+export async function proxyListModelCatalog(nodeType?: NodeType): Promise<ProxyModelCatalogResponse> {
+  const query = nodeType ? `?nodeType=${encodeURIComponent(nodeType)}` : '';
+  const response = await authFetch(apiUrl(`/api/model-catalog${query}`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyListApiKeyModels(apiKeyId: string): Promise<{ models: ProxyApiKeyModel[]; count: number }> {
+  const response = await authFetch(apiUrl(`/api/api-keys/${encodeURIComponent(apiKeyId)}/models`));
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyDiscoverApiKeyModels(apiKeyId: string): Promise<{ models: ProxyApiKeyModel[]; count: number }> {
+  const response = await authFetch(apiUrl(`/api/api-keys/${encodeURIComponent(apiKeyId)}/models/discover`), {
+    method: 'POST',
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyUpdateApiKeyModel(
+  apiKeyId: string,
+  apiKeyModelId: string,
+  body: Partial<Pick<ProxyApiKeyModel, 'adapterId' | 'capabilities' | 'displayName' | 'isEnabled' | 'modelProviderId'>>
+): Promise<{ model: ProxyApiKeyModel }> {
+  const response = await authFetch(apiUrl(`/api/api-keys/${encodeURIComponent(apiKeyId)}/models/${encodeURIComponent(apiKeyModelId)}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
 export async function proxyAdminListPlatformModels(
   options: ProxyPlatformModelListOptions = {}
 ): Promise<ProxyPlatformModelListResponse> {
@@ -1415,6 +1506,24 @@ export async function proxyAdminSavePlatformModel(body: Partial<ProxyPlatformMod
     : '/api/admin/platform-models';
   const response = await authFetch(apiUrl(path), {
     method,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+export async function proxyAdminCreatePlatformModelsFromKey(body: {
+  apiKeyId: string;
+  capability: ProxyPlatformModelCapability;
+  apiKeyModelIds: string[];
+  models?: string[];
+  sortOrder?: number;
+  isEnabled?: boolean;
+}): Promise<ProxyPlatformModelBulkFromKeyResponse> {
+  const response = await authFetch(apiUrl('/api/admin/platform-models/bulk-from-key'), {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });

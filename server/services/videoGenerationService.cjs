@@ -43,8 +43,9 @@ function createVideoTask(userId, body, status = 'queued', taskRepository = defau
     input: {
       providerId: body.providerId || 'seedance',
       apiKeyId: body.apiKeyId || '',
+      apiKeyModelId: body.apiKeyModelId || '',
       platformModelId: body.platformModelId || '',
-      baseUrl: body.apiKeyId || body.platformModelId ? '' : body.baseUrl || '',
+      baseUrl: body.apiKeyId || body.apiKeyModelId || body.platformModelId ? '' : body.baseUrl || '',
       publicBaseUrl: body.publicBaseUrl || '',
       model: body.model,
       mode: body.mode,
@@ -204,7 +205,7 @@ function createVideoGenerationService({
           return { status: 400, data: { error: 'API key is required' } };
         }
 
-        const resolvedAdapter = getVideoProviderAdapter(providerId);
+        const resolvedAdapter = getVideoProviderAdapter(providerId, credentials.adapterId);
         const effectiveTaskBody = {
           ...taskBody,
           model: credentials.model || taskBody.model,
@@ -241,7 +242,9 @@ function createVideoGenerationService({
           return { status: 400, data: { error: 'content is required' } };
         }
 
-        const capabilities = getModelCapabilities(providerId, arkBody.model);
+        const capabilities = credentials.modelCapabilities && Object.keys(credentials.modelCapabilities).length > 0
+          ? credentials.modelCapabilities
+          : getModelCapabilities(providerId, arkBody.model);
         const capabilityResult = filterVideoBodyByCapabilities(arkBody, capabilities);
 
         if (!capabilityResult.ok) {

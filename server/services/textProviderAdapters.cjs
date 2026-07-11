@@ -3,6 +3,7 @@ const { getProviderTemplate } = require('../providerRegistry.cjs');
 const INTERNAL_FIELDS = new Set([
   'apiKey',
   'apiKeyId',
+  'apiKeyModelId',
   'baseUrl',
   'hasSystem',
   'messageCount',
@@ -71,7 +72,9 @@ const openAiCompatibleProviderIds = new Set([
   'siliconflow',
 ]);
 
-function getTextProviderAdapter(providerId, requestFormat) {
+function getTextProviderAdapter(providerId, requestFormat, adapterId = '') {
+  if (adapterId === 'anthropic-messages') return adapters.anthropic;
+  if (adapterId === 'openai-chat') return adapters['openai-compatible'];
   if (requestFormat === 'anthropic' || providerId === 'anthropic') return adapters.anthropic;
   if (adapters[providerId]) return adapters[providerId];
   if (openAiCompatibleProviderIds.has(providerId)) return adapters['openai-compatible'];

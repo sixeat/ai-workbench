@@ -39,6 +39,30 @@ function migrate() {
       FOREIGN KEY (owner_user_id) REFERENCES users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS api_key_models (
+      id TEXT PRIMARY KEY,
+      api_key_id TEXT NOT NULL,
+      upstream_model TEXT NOT NULL,
+      model_provider_id TEXT NOT NULL,
+      adapter_id TEXT,
+      display_name TEXT NOT NULL,
+      capabilities_json TEXT,
+      capability_source TEXT NOT NULL DEFAULT 'fallback',
+      is_enabled INTEGER NOT NULL DEFAULT 0,
+      discovery_status TEXT NOT NULL DEFAULT 'unknown' CHECK (discovery_status IN ('active', 'missing', 'unknown')),
+      raw_metadata_json TEXT,
+      last_seen_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+      UNIQUE(api_key_id, upstream_model)
+    );
+
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS assets (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -217,6 +241,7 @@ function migrate() {
       id TEXT PRIMARY KEY,
       platform_model_id TEXT NOT NULL,
       api_key_id TEXT NOT NULL,
+      api_key_model_id TEXT,
       provider_id TEXT,
       upstream_model TEXT,
       priority INTEGER NOT NULL DEFAULT 100,
@@ -224,7 +249,8 @@ function migrate() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       FOREIGN KEY (platform_model_id) REFERENCES platform_models(id) ON DELETE CASCADE,
-      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id) ON DELETE CASCADE,
+      FOREIGN KEY (api_key_model_id) REFERENCES api_key_models(id) ON DELETE SET NULL
     );
 
     CREATE TABLE IF NOT EXISTS sessions (
@@ -300,6 +326,8 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_audit_logs_actor_created ON audit_logs(actor_user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_platform_models_enabled ON platform_models(is_enabled, sort_order, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_platform_model_routes_model ON platform_model_routes(platform_model_id, is_enabled, priority);
+    CREATE INDEX IF NOT EXISTS idx_api_key_models_key ON api_key_models(api_key_id, is_enabled, discovery_status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_api_key_models_provider ON api_key_models(model_provider_id, upstream_model);
   `);
 
   ensureColumn('users', 'username', 'TEXT');
@@ -311,6 +339,7 @@ function migrate() {
   ensureColumn('email_verifications', 'attempt_count', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('api_keys', 'models_json', 'TEXT');
   ensureColumn('api_keys', 'allowed_capabilities_json', 'TEXT');
+  ensureColumn('platform_model_routes', 'api_key_model_id', 'TEXT');
   ensureColumn('assets', 'size_bytes', 'INTEGER');
   ensureColumn('tasks', 'credit_cost', "INTEGER NOT NULL DEFAULT 0");
   ensureColumn('tasks', 'credit_status', "TEXT NOT NULL DEFAULT 'none'");
@@ -318,6 +347,110 @@ function migrate() {
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username)');
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email)');
   db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_credit_status ON tasks(credit_status, status)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_platform_model_routes_key_model ON platform_model_routes(api_key_model_id)');
+  runOneTimeMigration('api_key_models_backfill_v1', backfillApiKeyModels);
+  runOneTimeMigration('api_key_models_reclassify_legacy_v2', reclassifyLegacyApiKeyModels);
+}
+
+function runOneTimeMigration(name, migration) {
+  const claimMigration = db.prepare(`
+    INSERT OR IGNORE INTO schema_migrations (name, applied_at)
+    VALUES (?, ?)
+  `);
+  const run = db.transaction(() => {
+    const claimed = claimMigration.run(name, new Date().toISOString());
+    if (claimed.changes === 0) return;
+    migration();
+  });
+  run();
+}
+
+function backfillApiKeyModels() {
+  const now = new Date().toISOString();
+  const insertModel = db.prepare(`
+    INSERT INTO api_key_models (
+      id, api_key_id, upstream_model, model_provider_id, adapter_id, display_name,
+      capabilities_json, capability_source, is_enabled, discovery_status,
+      raw_metadata_json, last_seen_at, created_at, updated_at
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 'active', NULL, ?, ?, ?)
+    ON CONFLICT(api_key_id, upstream_model) DO NOTHING
+  `);
+  const keys = db.prepare('SELECT id, provider_id, models_json FROM api_keys').all();
+  for (const key of keys) {
+    const models = jsonParse(key.models_json, []);
+    for (const model of Array.isArray(models) ? models : []) {
+      const upstreamModel = String(model || '').trim();
+      if (!upstreamModel) continue;
+      insertModel.run(
+        require('crypto').randomUUID(),
+        key.id,
+        upstreamModel,
+        key.provider_id,
+        '',
+        upstreamModel,
+        '{}',
+        'legacy',
+        now,
+        now,
+        now
+      );
+    }
+  }
+
+  const routes = db.prepare(`
+    SELECT id, api_key_id, provider_id, upstream_model
+    FROM platform_model_routes
+    WHERE api_key_model_id IS NULL
+      AND COALESCE(upstream_model, '') <> ''
+  `).all();
+  for (const route of routes) {
+    const key = db.prepare('SELECT provider_id FROM api_keys WHERE id = ?').get(route.api_key_id);
+    if (!key) continue;
+    insertModel.run(
+      require('crypto').randomUUID(),
+      route.api_key_id,
+      route.upstream_model,
+      route.provider_id || key.provider_id,
+      '',
+      route.upstream_model,
+      '{}',
+      'legacy',
+      now,
+      now,
+      now
+    );
+    const model = db.prepare(`
+      SELECT id FROM api_key_models
+      WHERE api_key_id = ? AND upstream_model = ?
+    `).get(route.api_key_id, route.upstream_model);
+    if (model) {
+      db.prepare('UPDATE platform_model_routes SET api_key_model_id = ? WHERE id = ?').run(model.id, route.id);
+    }
+  }
+}
+
+function reclassifyLegacyApiKeyModels() {
+  const legacyModels = db.prepare(`
+    SELECT id, upstream_model
+    FROM api_key_models
+    WHERE api_key_models.capability_source = 'legacy'
+      AND COALESCE(api_key_models.adapter_id, '') = ''
+      AND api_key_models.discovery_status <> 'missing'
+  `).all();
+  const updateModel = db.prepare(`
+    UPDATE api_key_models
+    SET discovery_status = 'unknown',
+        is_enabled = 0,
+        updated_at = ?
+    WHERE id = ?
+  `);
+  const now = new Date().toISOString();
+
+  for (const model of legacyModels) {
+    if (!/(?:image|imagine|video|dall-e|diffusion|seedance|t2i|i2v|t2v|wanx)/i.test(model.upstream_model)) continue;
+    updateModel.run(now, model.id);
+  }
 }
 
 function ensureDefaultUser() {
@@ -496,6 +629,37 @@ function rowToApiKey(row, includeSecret = false) {
   return key;
 }
 
+function rowToApiKeyModel(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    apiKeyId: row.api_key_id,
+    upstreamModel: row.upstream_model,
+    modelProviderId: row.model_provider_id,
+    adapterId: row.adapter_id || '',
+    displayName: row.display_name || row.upstream_model,
+    capabilities: jsonParse(row.capabilities_json, {}),
+    capabilitySource: row.capability_source || 'fallback',
+    isEnabled: Boolean(row.is_enabled),
+    discoveryStatus: row.discovery_status || 'unknown',
+    rawMetadata: jsonParse(row.raw_metadata_json, {}),
+    lastSeenAt: row.last_seen_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    apiKey: row.key_name !== undefined
+      ? {
+        id: row.api_key_id,
+        name: row.key_name || '',
+        ownerUserId: row.owner_user_id || '',
+        providerId: row.key_provider_id || '',
+        keyScope: row.key_scope || '',
+        allowedCapabilities: jsonParse(row.key_allowed_capabilities_json, {}),
+        isEnabled: Boolean(row.key_is_enabled),
+      }
+      : undefined,
+  };
+}
+
 function rowToPlatformModel(row) {
   if (!row) return null;
   return {
@@ -518,6 +682,7 @@ function rowToPlatformModelRoute(row) {
     id: row.id,
     platformModelId: row.platform_model_id,
     apiKeyId: row.api_key_id,
+    apiKeyModelId: row.api_key_model_id || '',
     providerId: row.provider_id || '',
     upstreamModel: row.upstream_model || '',
     priority: Number(row.priority || 100),
@@ -530,7 +695,21 @@ function rowToPlatformModelRoute(row) {
         name: row.key_name || '',
         providerId: row.key_provider_id || '',
         keyScope: row.key_scope || '',
+        allowedCapabilities: jsonParse(row.key_allowed_capabilities_json, {}),
         isEnabled: Boolean(row.key_is_enabled),
+      }
+      : undefined,
+    apiKeyModel: row.api_key_model_upstream !== undefined
+      ? {
+        id: row.api_key_model_id || '',
+        upstreamModel: row.api_key_model_upstream || row.upstream_model || '',
+        modelProviderId: row.api_key_model_provider || row.provider_id || row.key_provider_id || '',
+        adapterId: row.api_key_model_adapter || '',
+        displayName: row.api_key_model_display_name || row.api_key_model_upstream || row.upstream_model || '',
+        capabilities: jsonParse(row.api_key_model_capabilities_json, {}),
+        capabilitySource: row.api_key_model_capability_source || 'fallback',
+        isEnabled: Boolean(row.api_key_model_is_enabled),
+        discoveryStatus: row.api_key_model_discovery_status || 'unknown',
       }
       : undefined,
   };
@@ -1217,7 +1396,48 @@ function upsertApiKey(apiKey) {
     createdAt: apiKey.createdAt || now,
     updatedAt: now,
   });
+  syncApiKeyModelSelections(id, apiKey.providerId, Array.isArray(apiKey.models) ? apiKey.models : []);
   return getApiKey(id);
+}
+
+function syncApiKeyModelSelections(apiKeyId, providerId, models) {
+  const selectedModels = Array.from(new Set(
+    models.map((model) => String(model || '').trim()).filter(Boolean)
+  ));
+  const now = new Date().toISOString();
+  const sync = db.transaction(() => {
+    db.prepare('UPDATE api_key_models SET is_enabled = 0, updated_at = ? WHERE api_key_id = ?').run(now, apiKeyId);
+    for (const upstreamModel of selectedModels) {
+      db.prepare(`
+        INSERT INTO api_key_models (
+          id, api_key_id, upstream_model, model_provider_id, adapter_id, display_name,
+          capabilities_json, capability_source, is_enabled, discovery_status,
+          raw_metadata_json, last_seen_at, created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, '', ?, '{}', 'legacy', 1, 'active', NULL, ?, ?, ?)
+        ON CONFLICT(api_key_id, upstream_model) DO UPDATE SET
+          model_provider_id = CASE
+            WHEN api_key_models.capability_source = 'manual' THEN api_key_models.model_provider_id
+            ELSE excluded.model_provider_id
+          END,
+          display_name = COALESCE(NULLIF(api_key_models.display_name, ''), excluded.display_name),
+          is_enabled = 1,
+          discovery_status = 'active',
+          last_seen_at = COALESCE(api_key_models.last_seen_at, excluded.last_seen_at),
+          updated_at = excluded.updated_at
+      `).run(
+        require('crypto').randomUUID(),
+        apiKeyId,
+        upstreamModel,
+        providerId,
+        upstreamModel,
+        now,
+        now,
+        now
+      );
+    }
+  });
+  sync();
 }
 
 function getApiKey(id, includeSecret = false) {
@@ -1304,6 +1524,181 @@ function deleteApiKey(id, userId = DEFAULT_USER_ID) {
     WHERE id = ? AND (owner_user_id = ? OR key_scope = 'server')
   `).run(id, userId);
   return result.changes > 0;
+}
+
+function getApiKeyModel(id) {
+  return rowToApiKeyModel(db.prepare(`
+    SELECT
+      api_key_models.*,
+      api_keys.name AS key_name,
+      api_keys.owner_user_id AS owner_user_id,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json
+    FROM api_key_models
+    JOIN api_keys ON api_keys.id = api_key_models.api_key_id
+    WHERE api_key_models.id = ?
+  `).get(id));
+}
+
+function getApiKeyModelByKeyAndName(apiKeyId, upstreamModel) {
+  return rowToApiKeyModel(db.prepare(`
+    SELECT
+      api_key_models.*,
+      api_keys.name AS key_name,
+      api_keys.owner_user_id AS owner_user_id,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json
+    FROM api_key_models
+    JOIN api_keys ON api_keys.id = api_key_models.api_key_id
+    WHERE api_key_models.api_key_id = ?
+      AND api_key_models.upstream_model = ?
+  `).get(apiKeyId, upstreamModel));
+}
+
+function getApiKeyModelForUser(id, userId = DEFAULT_USER_ID, includeServer = false) {
+  const scopeClause = includeServer
+    ? '(api_keys.owner_user_id = ? OR api_keys.key_scope = \'server\')'
+    : 'api_keys.owner_user_id = ? AND api_keys.key_scope = \'user\'';
+  return rowToApiKeyModel(db.prepare(`
+    SELECT
+      api_key_models.*,
+      api_keys.name AS key_name,
+      api_keys.owner_user_id AS owner_user_id,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json
+    FROM api_key_models
+    JOIN api_keys ON api_keys.id = api_key_models.api_key_id
+    WHERE api_key_models.id = ?
+      AND ${scopeClause}
+  `).get(id, userId));
+}
+
+function listApiKeyModels(apiKeyId, options = {}) {
+  const conditions = ['api_key_models.api_key_id = ?'];
+  const params = [apiKeyId];
+  if (!options.includeDisabled) conditions.push('api_key_models.is_enabled = 1');
+  if (!options.includeMissing) conditions.push("api_key_models.discovery_status <> 'missing'");
+  if (options.search) {
+    conditions.push('(LOWER(api_key_models.display_name) LIKE ? OR LOWER(api_key_models.upstream_model) LIKE ?)');
+    const like = `%${String(options.search).trim().toLowerCase()}%`;
+    params.push(like, like);
+  }
+  return db.prepare(`
+    SELECT
+      api_key_models.*,
+      api_keys.name AS key_name,
+      api_keys.owner_user_id AS owner_user_id,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json
+    FROM api_key_models
+    JOIN api_keys ON api_keys.id = api_key_models.api_key_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY api_key_models.display_name ASC, api_key_models.upstream_model ASC
+  `).all(...params).map(rowToApiKeyModel);
+}
+
+function listUserApiKeyModels(userId = DEFAULT_USER_ID, options = {}) {
+  const conditions = ["api_keys.owner_user_id = ?", "api_keys.key_scope = 'user'"];
+  const params = [userId];
+  if (!options.includeDisabled) {
+    conditions.push('api_keys.is_enabled = 1');
+    conditions.push('api_key_models.is_enabled = 1');
+  }
+  if (!options.includeMissing) conditions.push("api_key_models.discovery_status = 'active'");
+  return db.prepare(`
+    SELECT
+      api_key_models.*,
+      api_keys.name AS key_name,
+      api_keys.owner_user_id AS owner_user_id,
+      api_keys.provider_id AS key_provider_id,
+      api_keys.key_scope AS key_scope,
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json
+    FROM api_key_models
+    JOIN api_keys ON api_keys.id = api_key_models.api_key_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY api_key_models.display_name ASC, api_keys.name ASC
+  `).all(...params).map(rowToApiKeyModel);
+}
+
+function syncApiKeyLegacyModelsFromInstances(apiKeyId) {
+  const models = db.prepare(`
+    SELECT upstream_model
+    FROM api_key_models
+    WHERE api_key_id = ?
+      AND is_enabled = 1
+      AND discovery_status = 'active'
+    ORDER BY display_name ASC, upstream_model ASC
+  `).all(apiKeyId).map((row) => row.upstream_model);
+  db.prepare('UPDATE api_keys SET models_json = ? WHERE id = ?').run(jsonStringify(models), apiKeyId);
+  return models;
+}
+
+function upsertApiKeyModel(model) {
+  const now = new Date().toISOString();
+  const id = model.id || require('crypto').randomUUID();
+  db.prepare(`
+    INSERT INTO api_key_models (
+      id, api_key_id, upstream_model, model_provider_id, adapter_id, display_name,
+      capabilities_json, capability_source, is_enabled, discovery_status,
+      raw_metadata_json, last_seen_at, created_at, updated_at
+    )
+    VALUES (
+      @id, @apiKeyId, @upstreamModel, @modelProviderId, @adapterId, @displayName,
+      @capabilitiesJson, @capabilitySource, @isEnabled, @discoveryStatus,
+      @rawMetadataJson, @lastSeenAt, @createdAt, @updatedAt
+    )
+    ON CONFLICT(api_key_id, upstream_model) DO UPDATE SET
+      model_provider_id = excluded.model_provider_id,
+      adapter_id = excluded.adapter_id,
+      display_name = excluded.display_name,
+      capabilities_json = excluded.capabilities_json,
+      capability_source = excluded.capability_source,
+      is_enabled = excluded.is_enabled,
+      discovery_status = excluded.discovery_status,
+      raw_metadata_json = excluded.raw_metadata_json,
+      last_seen_at = excluded.last_seen_at,
+      updated_at = excluded.updated_at
+  `).run({
+    id,
+    apiKeyId: model.apiKeyId,
+    upstreamModel: model.upstreamModel,
+    modelProviderId: model.modelProviderId,
+    adapterId: model.adapterId || null,
+    displayName: model.displayName || model.upstreamModel,
+    capabilitiesJson: jsonStringify(model.capabilities || {}),
+    capabilitySource: model.capabilitySource || 'fallback',
+    isEnabled: model.isEnabled ? 1 : 0,
+    discoveryStatus: ['active', 'missing', 'unknown'].includes(model.discoveryStatus) ? model.discoveryStatus : 'unknown',
+    rawMetadataJson: jsonStringify(model.rawMetadata || {}),
+    lastSeenAt: model.lastSeenAt || null,
+    createdAt: model.createdAt || now,
+    updatedAt: now,
+  });
+  syncApiKeyLegacyModelsFromInstances(model.apiKeyId);
+  return getApiKeyModelByKeyAndName(model.apiKeyId, model.upstreamModel);
+}
+
+function markApiKeyModelsMissing(apiKeyId, activeModels, seenAt = new Date().toISOString()) {
+  const names = Array.from(new Set(activeModels.map((model) => String(model || '').trim()).filter(Boolean)));
+  const placeholders = names.map(() => '?').join(', ');
+  const clause = names.length ? `AND upstream_model NOT IN (${placeholders})` : '';
+  db.prepare(`
+    UPDATE api_key_models
+    SET discovery_status = 'missing',
+        updated_at = ?
+    WHERE api_key_id = ?
+      ${clause}
+  `).run(seenAt, apiKeyId, ...names);
+  syncApiKeyLegacyModelsFromInstances(apiKeyId);
 }
 
 function platformModelListOptions(options = {}) {
@@ -1413,9 +1808,19 @@ function listPlatformModelRoutes(platformModelId, options = {}) {
       api_keys.name AS key_name,
       api_keys.provider_id AS key_provider_id,
       api_keys.key_scope AS key_scope,
-      api_keys.is_enabled AS key_is_enabled
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json,
+      api_key_models.upstream_model AS api_key_model_upstream,
+      api_key_models.model_provider_id AS api_key_model_provider,
+      api_key_models.adapter_id AS api_key_model_adapter,
+      api_key_models.display_name AS api_key_model_display_name,
+      api_key_models.capabilities_json AS api_key_model_capabilities_json,
+      api_key_models.capability_source AS api_key_model_capability_source,
+      api_key_models.is_enabled AS api_key_model_is_enabled,
+      api_key_models.discovery_status AS api_key_model_discovery_status
     FROM platform_model_routes
     JOIN api_keys ON api_keys.id = platform_model_routes.api_key_id
+    LEFT JOIN api_key_models ON api_key_models.id = platform_model_routes.api_key_model_id
     WHERE platform_model_routes.platform_model_id = ?
       ${enabledClause}
     ORDER BY platform_model_routes.priority ASC, platform_model_routes.created_at ASC
@@ -1429,9 +1834,19 @@ function getPlatformModelRoute(id) {
       api_keys.name AS key_name,
       api_keys.provider_id AS key_provider_id,
       api_keys.key_scope AS key_scope,
-      api_keys.is_enabled AS key_is_enabled
+      api_keys.is_enabled AS key_is_enabled,
+      api_keys.allowed_capabilities_json AS key_allowed_capabilities_json,
+      api_key_models.upstream_model AS api_key_model_upstream,
+      api_key_models.model_provider_id AS api_key_model_provider,
+      api_key_models.adapter_id AS api_key_model_adapter,
+      api_key_models.display_name AS api_key_model_display_name,
+      api_key_models.capabilities_json AS api_key_model_capabilities_json,
+      api_key_models.capability_source AS api_key_model_capability_source,
+      api_key_models.is_enabled AS api_key_model_is_enabled,
+      api_key_models.discovery_status AS api_key_model_discovery_status
     FROM platform_model_routes
     JOIN api_keys ON api_keys.id = platform_model_routes.api_key_id
+    LEFT JOIN api_key_models ON api_key_models.id = platform_model_routes.api_key_model_id
     WHERE platform_model_routes.id = ?
   `).get(id));
 }
@@ -1441,16 +1856,17 @@ function upsertPlatformModelRoute(route) {
   const id = route.id || require('crypto').randomUUID();
   db.prepare(`
     INSERT INTO platform_model_routes (
-      id, platform_model_id, api_key_id, provider_id, upstream_model,
+      id, platform_model_id, api_key_id, api_key_model_id, provider_id, upstream_model,
       priority, is_enabled, created_at, updated_at
     )
     VALUES (
-      @id, @platformModelId, @apiKeyId, @providerId, @upstreamModel,
+      @id, @platformModelId, @apiKeyId, @apiKeyModelId, @providerId, @upstreamModel,
       @priority, @isEnabled, @createdAt, @updatedAt
     )
     ON CONFLICT(id) DO UPDATE SET
       platform_model_id = excluded.platform_model_id,
       api_key_id = excluded.api_key_id,
+      api_key_model_id = excluded.api_key_model_id,
       provider_id = excluded.provider_id,
       upstream_model = excluded.upstream_model,
       priority = excluded.priority,
@@ -1460,6 +1876,7 @@ function upsertPlatformModelRoute(route) {
     id,
     platformModelId: route.platformModelId,
     apiKeyId: route.apiKeyId,
+    apiKeyModelId: route.apiKeyModelId || null,
     providerId: route.providerId || null,
     upstreamModel: route.upstreamModel || null,
     priority: Number.isFinite(Number(route.priority)) ? Number(route.priority) : 100,
@@ -2390,6 +2807,7 @@ module.exports = {
   createAuditLog,
   createInvitationCode,
   countApiKeys,
+  countApiKeyModels: (apiKeyId, options = {}) => listApiKeyModels(apiKeyId, options).length,
   countAuditLogs,
   countInvitationCodes,
   countModelCapabilities,
@@ -2429,6 +2847,9 @@ module.exports = {
   getWorkflowVersionForUser,
   getPlatformModel,
   getPlatformModelRoute,
+  getApiKeyModel,
+  getApiKeyModelByKeyAndName,
+  getApiKeyModelForUser,
   listWorkflowVersions,
   restoreWorkflowVersion,
   listTasks,
@@ -2465,7 +2886,11 @@ module.exports = {
   listModelCapabilities,
   listPlatformModels,
   listPlatformModelRoutes,
+  listApiKeyModels,
+  listUserApiKeyModels,
+  markApiKeyModelsMissing,
   upsertApiKey,
+  upsertApiKeyModel,
   getApiKey,
   getApiKeyForUser,
   listApiKeys,

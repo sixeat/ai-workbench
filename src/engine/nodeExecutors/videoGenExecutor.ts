@@ -86,6 +86,7 @@ export async function executeVideoGen(
   context?: ExecutionContext
 ): Promise<NodeOutputs> {
   const instanceId = String(config.instanceId || '');
+  const apiKeyModelId = String(config.apiKeyModelId || '');
   const platformModelId = String(config.platformModelId || '');
   const shotList = collectShotList(inputs.images ?? inputs.prompt ?? inputs.shotList);
   const images = [
@@ -102,13 +103,13 @@ export async function executeVideoGen(
   const seed = Number(config.seed || 0);
   const negativePrompt = String(config.negativePrompt || '');
 
-  if (!instanceId && !platformModelId) return { video: null, task: null, error: '请选择 API 实例' };
+  if (!instanceId && !apiKeyModelId && !platformModelId) return { video: null, task: null, error: '请选择模型' };
   if (!prompt && images.length === 0 && !shotList) {
     return { video: null, task: null, error: '视频生成需要提示词、参考图或分镜' };
   }
 
   const runtimeConfig = instanceId ? getInstanceRuntimeConfig(instanceId) : null;
-  if (!platformModelId && !runtimeConfig) return { video: null, task: null, error: 'API 实例配置无效' };
+  if (!platformModelId && !apiKeyModelId && !runtimeConfig) return { video: null, task: null, error: '模型配置无效' };
 
   const content = buildContent([prompt, motion].filter(Boolean).join('\n'), images, config);
   const createdAt = new Date().toISOString();
@@ -142,7 +143,12 @@ export async function executeVideoGen(
         negativePrompt,
         upstreamTaskIds: context?.upstreamTaskIds || [],
       },
-      { apiKeyId: runtimeConfig?.apiKeyId, platformModelId: platformModelId || undefined, providerId }
+      {
+        apiKeyId: runtimeConfig?.apiKeyId,
+        apiKeyModelId: apiKeyModelId || undefined,
+        platformModelId: platformModelId || undefined,
+        providerId,
+      }
     );
 
     const backendTask = asRecord(response.task);

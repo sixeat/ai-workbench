@@ -27,6 +27,11 @@ function registerPlatformModelRoutes(app, context = {}) {
     sendResponse(res, service.savePlatformModel(req));
   });
 
+  app.post('/api/admin/platform-models/bulk-from-key', (req, res) => {
+    if (!requireAdmin(req, res)) return;
+    sendResponse(res, service.createPlatformModelsFromKey(req));
+  });
+
   app.patch('/api/admin/platform-models/:platformModelId', (req, res) => {
     if (!requireAdmin(req, res)) return;
     req.body = { ...(req.body || {}), id: req.params.platformModelId };

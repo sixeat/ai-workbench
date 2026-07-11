@@ -47,8 +47,9 @@ function createTextTask(userId, body, status = 'queued', taskRepository = defaul
     input: {
       ...safeBody,
       requestKind,
-      baseUrl: safeBody.apiKeyId || safeBody.platformModelId ? '' : safeBody.baseUrl || '',
+      baseUrl: safeBody.apiKeyId || safeBody.apiKeyModelId || safeBody.platformModelId ? '' : safeBody.baseUrl || '',
       apiKeyId: safeBody.apiKeyId || '',
+      apiKeyModelId: safeBody.apiKeyModelId || '',
       platformModelId: safeBody.platformModelId || '',
       messageCount: Array.isArray(safeBody.messages) ? safeBody.messages.length : 0,
       hasSystem: Boolean(safeBody.system),
@@ -65,7 +66,7 @@ function createTextGenerationService({
   taskRepository = defaultTaskRepository,
 }) {
   async function resolveRequestCredentials({ userId, body, secrets }) {
-    if (body.apiKeyId || body.platformModelId) {
+    if (body.apiKeyId || body.apiKeyModelId || body.platformModelId) {
       return resolveApiCredentials({ userId, body, secrets });
     }
     const direct = resolveDirectCredentials(body, secrets);
@@ -142,7 +143,9 @@ function createTextGenerationService({
           });
           return { status: 403, data: { error: credentialPolicyError } };
         }
-        const modelCapabilities = getModelCapabilities(providerId, effectiveBody.model || '');
+        const modelCapabilities = credentials.modelCapabilities && Object.keys(credentials.modelCapabilities).length > 0
+          ? credentials.modelCapabilities
+          : getModelCapabilities(providerId, effectiveBody.model || '');
         if (!modelCapabilities.chat) {
           const capabilityError = 'The selected model is not marked as supporting text generation.';
           if (!isLastAttempt) continue;
@@ -153,7 +156,11 @@ function createTextGenerationService({
           });
           return { status: 400, data: { error: capabilityError } };
         }
-        const adapter = getTextProviderAdapter(providerId, requestKind === 'claude' ? 'anthropic' : undefined);
+        const adapter = getTextProviderAdapter(
+          providerId,
+          requestKind === 'claude' ? 'anthropic' : undefined,
+          credentials.adapterId
+        );
         const request = adapter.buildRequest({ apiKey, body: effectiveBody, providerId });
         taskRepository.addTaskLog(activeTask.id, {
           event: 'upstream_text_submitted',

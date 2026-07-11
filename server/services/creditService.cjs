@@ -1,8 +1,12 @@
 const { apiKeyRepository: defaultApiKeyRepository } = require('../repositories/apiKeyRepository.cjs');
+const { apiKeyModelRepository: defaultApiKeyModelRepository } = require('../repositories/apiKeyModelRepository.cjs');
 const { authRepository: defaultAuthRepository } = require('../repositories/authRepository.cjs');
 const { creditRepository: defaultCreditRepository } = require('../repositories/creditRepository.cjs');
+const { platformModelRepository: defaultPlatformModelRepository } = require('../repositories/platformModelRepository.cjs');
 const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
+const { filterImageBodyByCapabilities, filterVideoBodyByCapabilities } = require('../modelCapabilities.cjs');
 const { createCreditPricingService } = require('./creditPricingService.cjs');
+const { createPlatformModelService } = require('./platformModelService.cjs');
 
 function publicKeyScope(scope) {
   return scope === 'user' ? 'user_key' : 'server_key';
@@ -48,11 +52,15 @@ function requestAuditMeta(req) {
 
 function createCreditService({
   apiKeyRepository = defaultApiKeyRepository,
+  apiKeyModelRepository = defaultApiKeyModelRepository,
   authRepository = defaultAuthRepository,
   creditPricingService = createCreditPricingService(),
   creditRepository = defaultCreditRepository,
+  platformModelRepository = defaultPlatformModelRepository,
   taskRepository = defaultTaskRepository,
 } = {}) {
+  const platformModelService = createPlatformModelService({ repository: platformModelRepository });
+
   function ensureUserAccount(userId) {
     return publicAccount(creditRepository.getOrCreateAccount(userId));
   }
@@ -60,6 +68,16 @@ function createCreditService({
   function resolveTaskKeyScope({ body = {}, userId }) {
     if (body.platformModelId) return 'server';
     if (body.apiKey) return 'user';
+    if (body.apiKeyModelId) {
+      const model = apiKeyModelRepository.getApiKeyModelForUser(body.apiKeyModelId, userId, false);
+      if (!model || !model.isEnabled || model.discoveryStatus !== 'active') {
+        throw Object.assign(new Error('API key model is not available for this user.'), {
+          expose: true,
+          status: 403,
+        });
+      }
+      return 'user';
+    }
     if (body.apiKeyId) {
       const key = apiKeyRepository.getApiKeyForUser(body.apiKeyId, userId, false);
       if (!key || !key.isEnabled) {
@@ -84,10 +102,58 @@ function createCreditService({
     };
   }
 
+  function selectionCapabilities({ body = {}, userId }) {
+    if (body.platformModelId) {
+      const model = platformModelService.getPublicPlatformModel(body.platformModelId);
+      if (!model) {
+        throw Object.assign(new Error('Platform model is not available.'), { expose: true, status: 409 });
+      }
+      return model.capabilities || {};
+    }
+
+    if (body.apiKeyModelId) {
+      const model = apiKeyModelRepository.getApiKeyModelForUser(body.apiKeyModelId, userId, false);
+      if (!model || !model.isEnabled || model.discoveryStatus !== 'active') {
+        throw Object.assign(new Error('API key model is not available for this user.'), {
+          expose: true,
+          status: 403,
+        });
+      }
+      return model.capabilities || {};
+    }
+
+    return null;
+  }
+
+  function assertTaskModelCapabilities({ body = {}, nodeType, userId }) {
+    const capabilities = selectionCapabilities({ body, userId });
+    if (!capabilities) return;
+
+    let validation;
+    if (nodeType === 'text') {
+      if (capabilities.chat) return;
+      validation = { ok: false, error: 'The selected model does not support text generation.' };
+    } else if (nodeType === 'image') {
+      validation = filterImageBodyByCapabilities(body, capabilities);
+    } else if (nodeType === 'video') {
+      validation = filterVideoBodyByCapabilities(body, capabilities);
+    } else {
+      return;
+    }
+
+    if (!validation.ok) {
+      throw Object.assign(new Error(validation.error || 'Model capability validation failed.'), {
+        expose: true,
+        status: 400,
+      });
+    }
+  }
+
   function createBillableTask({ body = {}, createTask, nodeType, requestMeta = {}, userId }) {
     if (typeof createTask !== 'function') {
       throw new Error('createTask callback is required.');
     }
+    assertTaskModelCapabilities({ body, nodeType, userId });
     const keyScope = resolveTaskKeyScope({ body, userId });
     const estimate = creditPricingService.estimate({ body, keyScope, nodeType });
     const billing = billingInput(estimate);
@@ -229,6 +295,7 @@ function createCreditService({
     listAdminUsers,
     listMyTransactions,
     refundTask,
+    assertTaskModelCapabilities,
     resolveTaskKeyScope,
   };
 }

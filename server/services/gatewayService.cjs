@@ -21,14 +21,17 @@ const GATEWAY_ROUTE_TABLE = Object.freeze([
   { prefix: '/api/videos', service: 'worker-service', module: 'generation', upstreamKey: 'worker' },
   { prefix: '/api/workflows', service: 'workflow-service', module: 'workflows', upstreamKey: 'workflow' },
   { prefix: '/api/models', service: 'model-service', module: 'models', upstreamKey: 'model' },
+  { prefix: '/api/model-catalog', service: 'model-service', module: 'modelCatalog', upstreamKey: 'model' },
   { prefix: '/api/model-capabilities', service: 'model-service', module: 'modelCapabilities', upstreamKey: 'model' },
   { prefix: '/api/model-capability-presets', service: 'model-service', module: 'modelCapabilities', upstreamKey: 'model' },
   { prefix: '/api/providers', service: 'model-service', module: 'providers', upstreamKey: 'model' },
   { prefix: '/api/api-keys', service: 'model-service', module: 'apiKeys', upstreamKey: 'model' },
+  { prefix: '/api/platform-models', service: 'model-service', module: 'platformModels', upstreamKey: 'model' },
   { prefix: '/api/chat', service: 'model-service', module: 'generation', upstreamKey: 'model' },
   { prefix: '/api/claude', service: 'model-service', module: 'generation', upstreamKey: 'model' },
   { prefix: '/api/proxy', service: 'model-service', module: 'proxy', upstreamKey: 'model' },
   { prefix: '/api/admin/credits', service: 'auth-service', module: 'credits', upstreamKey: 'auth' },
+  { prefix: '/api/admin/platform-models', service: 'model-service', module: 'platformModels', upstreamKey: 'model' },
   { prefix: '/api/admin/health', service: 'admin-gateway', module: 'health' },
   { prefix: '/api/health', service: 'gateway', module: 'health' },
 ]);
@@ -290,7 +293,7 @@ function createApiGateway(options = {}) {
     app.use(cors({
       origin: corsOrigin,
       credentials: true,
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization', 'x-user-id', 'x-workbench-token', 'x-workbench-admin-token', 'x-request-id'],
     }));
 

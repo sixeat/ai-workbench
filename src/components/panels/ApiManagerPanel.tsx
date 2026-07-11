@@ -31,8 +31,10 @@ import {
 } from '../../data/providerRegistry';
 import {
   proxyAuthMe,
+  proxyDiscoverApiKeyModels,
   proxyDeleteApiKey,
   proxyListApiKeys,
+  proxyListApiKeyModels,
   proxyListModelCapabilityPresets,
   proxyListModelCapabilities,
   proxyListProviders,
@@ -40,7 +42,9 @@ import {
   proxySaveModelCapabilities,
   proxyTestApiKey,
   proxyUpdateApiKey,
+  proxyUpdateApiKeyModel,
   type ProxyApiKey,
+  type ProxyApiKeyModel,
   type ProxyApiKeyTestResult,
   type ProxyAuthMe,
   type ProxyModelCapabilityPreset,
@@ -53,6 +57,8 @@ import { groupModelCapabilityPresetsByProvider, summarizeModelCapabilityPresetPr
 import { clearModelCapabilityCache } from '../../lib/modelCapabilityCache';
 import { parseOptionalNumberInput, parseOptionalRatioInput } from '../../lib/modelCapabilityForm';
 import type { ApiKeyAllowedCapabilities } from '../../types/api';
+import type { ModelCapabilities } from '../../types/modelCapabilities';
+import { useModelCatalogStore } from '../../stores/modelCatalogStore';
 
 interface ApiManagerPanelProps {
   isOpen: boolean;
@@ -235,6 +241,7 @@ export function ApiManagerPanel({
   const [localForm, setLocalForm] = useState(emptyLocalForm);
   const [serverForm, setServerForm] = useState(emptyServerForm);
   const [serverKeys, setServerKeys] = useState<ProxyApiKey[]>([]);
+  const [keyModels, setKeyModels] = useState<ProxyApiKeyModel[]>([]);
   const [serverKeyTotal, setServerKeyTotal] = useState(0);
   const [apiKeyQuota, setApiKeyQuota] = useState<ApiKeyQuotaSummary | null>(null);
   const [capabilities, setCapabilities] = useState<ProxyModelCapabilities[]>([]);
@@ -258,6 +265,7 @@ export function ApiManagerPanel({
   const [authInfo, setAuthInfo] = useState<ProxyAuthMe | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
+  const { invalidate: invalidateModelCatalog, loadCatalog } = useModelCatalogStore();
 
   const isServerMode = authInfo?.deploymentMode === 'server';
   const canManageServerKeys = authInfo?.user?.role === 'admin';
@@ -580,10 +588,20 @@ export function ApiManagerPanel({
     setModelLoading(false);
   };
 
+  const loadKeyModels = async (apiKeyId: string) => {
+    try {
+      const data = await proxyListApiKeyModels(apiKeyId);
+      setKeyModels(data.models);
+    } catch {
+      setKeyModels([]);
+    }
+  };
+
   const selectServerKey = (key: ProxyApiKey) => {
     switchTab('server');
     setServerForm(apiKeyToServerForm(key, { testModel: serverForm.id === key.id ? serverForm.testModel : '' }));
     setKeyTestResult(null);
+    void loadKeyModels(key.id);
   };
 
   const updateServerForm = (patch: Partial<ServerKeyForm>) => {
@@ -623,6 +641,7 @@ export function ApiManagerPanel({
       keyScope: nextScope,
       models: [],
     });
+    setKeyModels([]);
     setKeyTestResult(null);
   };
 
@@ -650,7 +669,6 @@ export function ApiManagerPanel({
           name: serverForm.name,
           providerId: serverForm.providerId,
           baseUrl: serverForm.baseUrl,
-          models: serverForm.models,
           allowedCapabilities: serverForm.allowedCapabilities,
           isEnabled: serverForm.isEnabled,
           ...(serverForm.apiKey ? { apiKey: serverForm.apiKey } : {}),
@@ -678,6 +696,7 @@ export function ApiManagerPanel({
           : [savedKey, ...current];
       });
       setServerForm(nextForm);
+      await loadKeyModels(savedKey.id);
       await loadServerData(savedKey);
       setNotice(`${keyPanelLabel}已保存，可以继续测试模型能力`);
     } catch (err) {
@@ -743,16 +762,56 @@ export function ApiManagerPanel({
     setModelLoading(true);
     setError('');
     try {
-      const { result } = await proxyTestApiKey(serverForm.id, {
-        providerId: serverForm.providerId,
-        model: serverForm.testModel.trim() || undefined,
-      });
-      const models = result.models.models.map((model) => model.id);
-      setServerForm((current) => ({ ...current, models }));
-      setKeyTestResult(result);
-      setNotice(`获取到 ${models.length} 个模型，请保存 Key 后生效`);
+      const data = await proxyDiscoverApiKeyModels(serverForm.id);
+      setKeyModels(data.models);
+      setNotice(`发现 ${data.count} 个模型。启用后才会进入节点选择器。`);
     } catch (err) {
       setError(toErrorMessage(err, '获取服务器模型列表失败'));
+    } finally {
+      setModelLoading(false);
+    }
+  };
+
+  const toggleKeyModel = async (model: ProxyApiKeyModel) => {
+    if (!serverForm.id) return;
+    setModelLoading(true);
+    setError('');
+    try {
+      const nextEnabled = !model.isEnabled;
+      const { model: savedModel } = await proxyUpdateApiKeyModel(serverForm.id, model.id, { isEnabled: nextEnabled });
+      const nextModels = keyModels.map((item) => item.id === model.id ? savedModel : item);
+      const enabledNames = nextModels.filter((item) => item.isEnabled).map((item) => item.upstreamModel);
+      setKeyModels(nextModels);
+      setServerForm((current) => ({ ...current, models: enabledNames }));
+      await loadServerData();
+      invalidateModelCatalog();
+      await loadCatalog(true);
+      setNotice(nextEnabled ? '模型已启用' : '模型已停用');
+    } catch (err) {
+      setError(toErrorMessage(err, '更新模型状态失败'));
+      await loadKeyModels(serverForm.id);
+    } finally {
+      setModelLoading(false);
+    }
+  };
+
+  const configureKeyModel = async (
+    model: ProxyApiKeyModel,
+    patch: Partial<Pick<ProxyApiKeyModel, 'adapterId' | 'capabilities' | 'displayName' | 'isEnabled' | 'modelProviderId'>>
+  ) => {
+    if (!serverForm.id) return;
+    setModelLoading(true);
+    setError('');
+    try {
+      const { model: savedModel } = await proxyUpdateApiKeyModel(serverForm.id, model.id, patch);
+      setKeyModels((current) => current.map((item) => item.id === savedModel.id ? savedModel : item));
+      invalidateModelCatalog();
+      await loadCatalog(true);
+      await loadServerData();
+      setNotice('模型配置已保存');
+    } catch (err) {
+      setError(toErrorMessage(err, '保存模型配置失败'));
+      throw err;
     } finally {
       setModelLoading(false);
     }
@@ -955,6 +1014,7 @@ export function ApiManagerPanel({
                 testing={testingKey}
                 savingCapabilities={savingCapabilities}
                 testResult={keyTestResult}
+                keyModels={keyModels}
                 canManageServerKeys={canManageServerKeys}
                 serverOnly={adminServerKeysOnly}
                 userOnly={workbenchUserKeysOnly}
@@ -963,6 +1023,8 @@ export function ApiManagerPanel({
                 onChange={updateServerForm}
                 onSave={saveServerKey}
                 onFetchModels={fetchServerModels}
+                onToggleKeyModel={(model) => void toggleKeyModel(model)}
+                onConfigureKeyModel={configureKeyModel}
                 onAddModel={(model) => setServerForm((prev) => ({ ...prev, models: prev.models.includes(model) ? prev.models : [...prev.models, model] }))}
                 onRemoveModel={(model) => setServerForm((prev) => ({ ...prev, models: prev.models.filter((item) => item !== model) }))}
                 onTest={testServerKey}
@@ -1428,6 +1490,7 @@ function ServerKeyEditor(props: {
   testing: boolean;
   savingCapabilities: boolean;
   testResult: ProxyApiKeyTestResult | null;
+  keyModels: ProxyApiKeyModel[];
   canManageServerKeys: boolean;
   serverOnly: boolean;
   userOnly: boolean;
@@ -1436,6 +1499,11 @@ function ServerKeyEditor(props: {
   onChange: (patch: Partial<typeof emptyServerForm>) => void;
   onSave: () => void;
   onFetchModels: () => void;
+  onToggleKeyModel: (model: ProxyApiKeyModel) => void;
+  onConfigureKeyModel: (
+    model: ProxyApiKeyModel,
+    patch: Partial<Pick<ProxyApiKeyModel, 'adapterId' | 'capabilities' | 'displayName' | 'isEnabled' | 'modelProviderId'>>
+  ) => Promise<void>;
   onAddModel: (model: string) => void;
   onRemoveModel: (model: string) => void;
   onTest: (options?: KeyTestOptions) => void;
@@ -1495,13 +1563,23 @@ function ServerKeyEditor(props: {
         </>
       )}
       <ApiBasicFields form={props.form} showKey={props.showKey} onToggleKey={props.onToggleKey} onChange={props.onChange} />
-      <ModelListEditor
-        models={props.form.models}
-        loading={props.modelLoading}
-        onFetch={props.onFetchModels}
-        onAdd={props.onAddModel}
-        onRemove={props.onRemoveModel}
-      />
+      {props.form.id ? (
+        <ModelInstancesEditor
+          models={props.keyModels}
+          loading={props.modelLoading}
+          onFetch={props.onFetchModels}
+          onToggle={props.onToggleKeyModel}
+          onConfigure={props.onConfigureKeyModel}
+        />
+      ) : (
+        <ModelListEditor
+          models={props.form.models}
+          loading={props.modelLoading}
+          onFetch={props.onFetchModels}
+          onAdd={props.onAddModel}
+          onRemove={props.onRemoveModel}
+        />
+      )}
       <ApiKeyCapabilitySelector
         saving={props.savingCapabilities}
         value={props.form.allowedCapabilities}
@@ -2255,6 +2333,277 @@ function PresetSelect({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function modelInstanceCapabilityLabel(model: ProxyApiKeyModel): string {
+  if (model.capabilities.videoGeneration) return '视频';
+  if (model.capabilities.imageGeneration) return model.capabilities.imageReference ? '图片 / 参考图' : '图片';
+  if (model.capabilities.chat) return '文本';
+  return '能力未知';
+}
+
+type ModelOperation = 'chat' | 'imageGeneration' | 'videoGeneration';
+
+interface ModelInstanceDraft {
+  adapterId: string;
+  displayName: string;
+  imageReference: boolean;
+  modelProviderId: string;
+  multiImageReference: boolean;
+  operation: ModelOperation;
+}
+
+const MODEL_ADAPTER_OPTIONS: Record<ModelOperation, Array<{ label: string; value: string }>> = {
+  chat: [
+    { label: 'OpenAI Chat', value: 'openai-chat' },
+    { label: 'Anthropic Messages', value: 'anthropic-messages' },
+  ],
+  imageGeneration: [
+    { label: 'OpenAI Image', value: 'openai-image' },
+    { label: 'DashScope Image', value: 'dashscope-image' },
+  ],
+  videoGeneration: [
+    { label: 'xAI Video', value: 'xai-video' },
+    { label: 'DashScope Video', value: 'dashscope-video' },
+    { label: 'Seedance Video', value: 'seedance-video' },
+  ],
+};
+
+function modelOperation(model: ProxyApiKeyModel): ModelOperation {
+  if (model.capabilities.videoGeneration) return 'videoGeneration';
+  if (model.capabilities.imageGeneration) return 'imageGeneration';
+  return 'chat';
+}
+
+function defaultAdapterId(providerId: string, operation: ModelOperation): string {
+  if (operation === 'chat') return providerId === 'anthropic' ? 'anthropic-messages' : 'openai-chat';
+  if (operation === 'imageGeneration') return providerId === 'aliyun-bailian' ? 'dashscope-image' : 'openai-image';
+  if (providerId === 'aliyun-bailian') return 'dashscope-video';
+  if (providerId === 'seedance') return 'seedance-video';
+  return 'xai-video';
+}
+
+function modelDraft(model: ProxyApiKeyModel): ModelInstanceDraft {
+  const operation = modelOperation(model);
+  return {
+    adapterId: model.adapterId || defaultAdapterId(model.modelProviderId, operation),
+    displayName: model.displayName || model.upstreamModel,
+    imageReference: Boolean(model.capabilities.imageReference),
+    modelProviderId: model.modelProviderId,
+    multiImageReference: Boolean(model.capabilities.multiImageReference),
+    operation,
+  };
+}
+
+function capabilitiesForDraft(existing: ModelCapabilities, draft: ModelInstanceDraft): ModelCapabilities {
+  return {
+    ...existing,
+    chat: draft.operation === 'chat',
+    imageGeneration: draft.operation === 'imageGeneration',
+    imageReference: draft.operation !== 'chat' && draft.imageReference,
+    multiImageReference: draft.operation !== 'chat' && draft.multiImageReference,
+    videoGeneration: draft.operation === 'videoGeneration',
+  };
+}
+
+function ModelInstancesEditor(props: {
+  models: ProxyApiKeyModel[];
+  loading: boolean;
+  onFetch: () => void;
+  onToggle: (model: ProxyApiKeyModel) => void;
+  onConfigure: (
+    model: ProxyApiKeyModel,
+    patch: Partial<Pick<ProxyApiKeyModel, 'adapterId' | 'capabilities' | 'displayName' | 'isEnabled' | 'modelProviderId'>>
+  ) => Promise<void>;
+}) {
+  const [editingModelId, setEditingModelId] = useState('');
+  const [draft, setDraft] = useState<ModelInstanceDraft | null>(null);
+  const editingModel = props.models.find((model) => model.id === editingModelId) || null;
+
+  const startEditing = (model: ProxyApiKeyModel) => {
+    setEditingModelId(model.id);
+    setDraft(modelDraft(model));
+  };
+
+  const saveDraft = async () => {
+    if (!editingModel || !draft) return;
+    await props.onConfigure(editingModel, {
+      adapterId: draft.adapterId,
+      capabilities: capabilitiesForDraft(editingModel.capabilities, draft),
+      displayName: draft.displayName.trim() || editingModel.upstreamModel,
+      modelProviderId: draft.modelProviderId.trim() || editingModel.modelProviderId,
+    });
+    setEditingModelId('');
+    setDraft(null);
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[10px] text-gray-500">上游模型目录</div>
+          <div className="mt-0.5 text-[10px] text-gray-600">获取结果会全部保存，只有启用的模型会进入节点选择器。</div>
+        </div>
+        <button onClick={props.onFetch} className="flex shrink-0 items-center gap-1 rounded px-2 py-1 text-[10px] text-accent hover:bg-accent/10">
+          {props.loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          重新发现
+        </button>
+      </div>
+      <div className="max-h-64 overflow-auto rounded-lg border border-panel-border bg-canvas-bg/40">
+        {props.models.length === 0 ? (
+          <div className="px-3 py-8 text-center text-[10px] text-gray-600">尚未发现模型</div>
+        ) : props.models.map((model) => {
+          const canEnable = model.discoveryStatus === 'active' && Boolean(model.adapterId);
+          return (
+            <div key={model.id} className="flex items-center gap-3 border-b border-panel-border px-3 py-2 last:border-b-0">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs text-gray-200">{model.displayName}</div>
+                <div className="mt-1 flex flex-wrap gap-1 text-[9px] text-gray-500">
+                  <span>{modelInstanceCapabilityLabel(model)}</span>
+                  <span>·</span>
+                  <span>{model.adapterId || '未配置 Adapter'}</span>
+                  {model.discoveryStatus !== 'active' && <span className="text-amber-300">· {model.discoveryStatus === 'missing' ? '上游已下线' : '需要能力配置'}</span>}
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={props.loading}
+                onClick={() => startEditing(model)}
+                className="shrink-0 rounded-md border border-panel-border px-2 py-1 text-[10px] text-gray-400 hover:border-accent hover:text-accent disabled:opacity-40"
+              >
+                配置
+              </button>
+              <button
+                type="button"
+                disabled={props.loading || (!model.isEnabled && !canEnable)}
+                onClick={() => props.onToggle(model)}
+                className={cn(
+                  'rounded-md border px-2.5 py-1 text-[10px] disabled:cursor-not-allowed disabled:opacity-40',
+                  model.isEnabled
+                    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+                    : 'border-panel-border text-gray-400 hover:border-accent hover:text-accent'
+                )}
+              >
+                {model.isEnabled ? '已启用' : '启用'}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <ModelInstanceConfigurationEditor
+        draft={draft}
+        loading={props.loading}
+        model={editingModel}
+        onCancel={() => {
+          setEditingModelId('');
+          setDraft(null);
+        }}
+        onChange={setDraft}
+        onSave={() => void saveDraft().catch(() => undefined)}
+      />
+    </div>
+  );
+}
+
+function ModelInstanceConfigurationEditor({
+  draft,
+  loading,
+  model,
+  onCancel,
+  onChange,
+  onSave,
+}: {
+  draft: ModelInstanceDraft | null;
+  loading: boolean;
+  model: ProxyApiKeyModel | null;
+  onCancel: () => void;
+  onChange: (draft: ModelInstanceDraft | null) => void;
+  onSave: () => void;
+}) {
+  if (!model || !draft) return null;
+  const patchDraft = (patch: Partial<ModelInstanceDraft>) => onChange({ ...draft, ...patch });
+
+  return (
+    <div className="space-y-3 rounded-lg border border-accent/25 bg-accent/5 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-medium text-gray-200">配置模型实例</div>
+          <div className="mt-1 text-[10px] text-gray-500">{model.upstreamModel}</div>
+        </div>
+        <button type="button" onClick={onCancel} className="rounded p-1 text-gray-500 hover:bg-white/5 hover:text-white" title="关闭">
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        <label className="space-y-1">
+          <span className="text-[10px] text-gray-500">显示名称</span>
+          <input
+            value={draft.displayName}
+            onChange={(event) => patchDraft({ displayName: event.target.value })}
+            className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[10px] text-gray-500">能力命名空间</span>
+          <input
+            value={draft.modelProviderId}
+            onChange={(event) => patchDraft({ modelProviderId: event.target.value })}
+            className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+            placeholder="openai-compatible / xai / aliyun-bailian"
+          />
+        </label>
+        <label className="space-y-1">
+          <span className="text-[10px] text-gray-500">模型类型</span>
+          <select
+            value={draft.operation}
+            onChange={(event) => {
+              const operation = event.target.value as ModelOperation;
+              patchDraft({
+                operation,
+                adapterId: defaultAdapterId(draft.modelProviderId, operation),
+              });
+            }}
+            className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+          >
+            <option value="chat">文本</option>
+            <option value="imageGeneration">图片</option>
+            <option value="videoGeneration">视频</option>
+          </select>
+        </label>
+        <label className="space-y-1">
+          <span className="text-[10px] text-gray-500">请求 Adapter</span>
+          <select
+            value={draft.adapterId}
+            onChange={(event) => patchDraft({ adapterId: event.target.value })}
+            className="w-full rounded-md border border-panel-border bg-panel-bg px-2.5 py-1.5 text-xs text-white focus:border-accent focus:outline-none"
+          >
+            {MODEL_ADAPTER_OPTIONS[draft.operation].map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {draft.operation !== 'chat' && (
+        <div className="flex flex-wrap gap-3">
+          <label className="flex items-center gap-2 text-[10px] text-gray-400">
+            <input type="checkbox" checked={draft.imageReference} onChange={(event) => patchDraft({ imageReference: event.target.checked })} />
+            支持参考图
+          </label>
+          <label className="flex items-center gap-2 text-[10px] text-gray-400">
+            <input type="checkbox" checked={draft.multiImageReference} onChange={(event) => patchDraft({ multiImageReference: event.target.checked })} />
+            支持多参考图
+          </label>
+        </div>
+      )}
+      <div className="flex justify-end gap-2">
+        <PanelButton onClick={onCancel} variant="secondary" size="sm">取消</PanelButton>
+        <PanelButton onClick={onSave} disabled={loading} variant="primary" size="sm">
+          <Save className="h-3 w-3" />
+          保存配置
+        </PanelButton>
+      </div>
     </div>
   );
 }

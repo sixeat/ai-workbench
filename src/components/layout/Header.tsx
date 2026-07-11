@@ -1,6 +1,7 @@
 import { CheckSquare, ChevronDown, Coins, Folder, History, Images, Loader2, LockKeyhole, LogOut, Play, Save, ShieldCheck, Square, Terminal, Zap } from 'lucide-react';
 import { cn } from '../../lib/utils';
-import { executeWorkflow } from '../../engine/WorkflowEngine';
+import { executeSelectedNodes, executeWorkflow } from '../../engine/WorkflowEngine';
+import { useCanvasStore } from '../../stores/canvasStore';
 import { useWorkflowStore } from '../../stores/workflowStore';
 import type { ProxyUser } from '../../lib/apiProxy';
 import { accountDisplayName, deploymentLabel, roleLabel } from '../../lib/authDisplay';
@@ -41,14 +42,25 @@ export function Header({
   onLogout,
 }: HeaderProps) {
   const { execution, reset } = useWorkflowStore();
+  const selectedNodeIds = useCanvasStore((state) => state.selectedNodeIds);
   const modeLabel = deploymentLabel(deploymentMode);
   const userRoleLabel = roleLabel(currentUser?.role);
   const displayName = accountDisplayName(currentUser, deploymentMode);
   const shouldShowAccountStatus = Boolean(currentUser || modeLabel);
+  const selectedCount = selectedNodeIds.length;
 
   const handleRun = async () => {
     if (execution.status === 'running') return;
     await executeWorkflow();
+  };
+
+  const handleRunSelection = async () => {
+    if (execution.status === 'running') return;
+    if (selectedCount === 0) {
+      window.alert('请先在画布上框选或多选要运行的节点。');
+      return;
+    }
+    await executeSelectedNodes(selectedNodeIds);
   };
 
   return (
@@ -67,7 +79,7 @@ export function Header({
 
       <div className="topbar-actions">
         <button
-          onClick={handleRun}
+          onClick={handleRunSelection}
           disabled={execution.status === 'running'}
           className={cn(
             'ghost-button',
@@ -75,10 +87,11 @@ export function Header({
               ? 'cursor-not-allowed opacity-50'
               : ''
           )}
-          title="用于复用完整模板。日常创作建议在右侧属性面板运行单个节点或选区。"
+          title={selectedCount > 0 ? `运行当前选中的 ${selectedCount} 个节点，并自动补齐上游依赖。` : '在画布空白处按住左键拖出范围框，或按住 Shift/Command 点击多个节点。'}
         >
           <CheckSquare className="h-4 w-4" />
           运行框选
+          {selectedCount > 0 && <span className="rounded bg-canvas-bg px-1.5 py-0.5 text-[10px] text-accent">{selectedCount}</span>}
         </button>
 
         <button

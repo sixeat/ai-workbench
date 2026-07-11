@@ -7,6 +7,8 @@ function createPlatformModelRepository(overrides = {}) {
     deletePlatformModel: overrides.deletePlatformModel || db.deletePlatformModel,
     deletePlatformModelRoute: overrides.deletePlatformModelRoute || db.deletePlatformModelRoute,
     getApiKey: overrides.getApiKey || db.getApiKey,
+    getApiKeyModel: overrides.getApiKeyModel || db.getApiKeyModel,
+    getApiKeyModelByKeyAndName: overrides.getApiKeyModelByKeyAndName || db.getApiKeyModelByKeyAndName,
     getPlatformModel: overrides.getPlatformModel || db.getPlatformModel,
     getPlatformModelRoute: overrides.getPlatformModelRoute || db.getPlatformModelRoute,
     listPlatformModelRoutes: overrides.listPlatformModelRoutes || db.listPlatformModelRoutes,

@@ -231,7 +231,10 @@ export function validateNodeConfig(
     .map((field) => {
       const rawValue = node.config[field.key];
       const value = isEmptyConfigValue(rawValue) ? field.defaultValue : rawValue;
-      if (field.key === 'instanceId' && !isEmptyConfigValue(node.config.platformModelId)) return '';
+      if (field.key === 'instanceId' && (
+        !isEmptyConfigValue(node.config.platformModelId)
+        || !isEmptyConfigValue(node.config.apiKeyModelId)
+      )) return '';
       if (field.required && isEmptyConfigValue(value)) return `配置 ${field.label}(${field.key}) 为必填`;
       if (!valueMatchesConfigField(value, field)) return `配置 ${field.label}(${field.key}) 需要 ${field.type} 类型`;
       if (field.type === 'number' && !isEmptyConfigValue(value)) {

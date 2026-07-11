@@ -43,8 +43,9 @@ function createImageTask(userId, body, status = 'queued', taskRepository = defau
     input: {
       providerId: body.providerId || 'openai-compatible',
       apiKeyId: body.apiKeyId || '',
+      apiKeyModelId: body.apiKeyModelId || '',
       platformModelId: body.platformModelId || '',
-      baseUrl: body.apiKeyId || body.platformModelId ? '' : body.baseUrl || '',
+      baseUrl: body.apiKeyId || body.apiKeyModelId || body.platformModelId ? '' : body.baseUrl || '',
       publicBaseUrl: body.publicBaseUrl || '',
       model: body.model,
       prompt: body.prompt,
@@ -209,6 +210,7 @@ function createImageGenerationService({
           baseUrl: _baseUrl,
           apiKey: _apiKey,
           apiKeyId: _apiKeyId,
+          apiKeyModelId: _apiKeyModelId,
           platformModelId: _platformModelId,
           publicBaseUrl: _publicBaseUrl,
           userId: _userId,
@@ -238,7 +240,9 @@ function createImageGenerationService({
           });
           return { status: 403, data: { error: credentialPolicyError } };
         }
-        const capabilities = getModelCapabilities(providerId, normalizedImageBody.model);
+        const capabilities = credentials.modelCapabilities && Object.keys(credentials.modelCapabilities).length > 0
+          ? credentials.modelCapabilities
+          : getModelCapabilities(providerId, normalizedImageBody.model);
         const capabilityResult = filterImageBodyByCapabilities(normalizedImageBody, capabilities);
 
         if (!capabilityResult.ok) {
@@ -254,7 +258,7 @@ function createImageGenerationService({
           };
         }
 
-        const adapter = getImageProviderAdapter(providerId);
+        const adapter = getImageProviderAdapter(providerId, credentials.adapterId);
         const request = adapter.buildRequest({
           apiKey,
           body: capabilityResult.body,

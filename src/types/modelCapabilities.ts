@@ -85,7 +85,14 @@ export interface ModelCapabilities {
   [key: string]: unknown;
 }
 
-export type ModelCapabilitySource = 'route-inferred' | 'platform-override' | 'fallback' | 'matched-rules';
+export type ModelCapabilitySource =
+  | 'route-inferred'
+  | 'platform-override'
+  | 'provider-default'
+  | 'fallback'
+  | 'matched-rules'
+  | 'legacy'
+  | 'manual';
 
 export interface ModelCapabilityRuleMatch {
   id: string;

@@ -106,7 +106,7 @@ function createApiKeyTestService({
       billable: false,
       status: result.status,
       count: models.length,
-      models: models.slice(0, 20),
+      models,
       ...(result.status >= 400 ? { error: safeUpstreamErrorMessage(result, 'Model list request failed.') } : {}),
     };
   }
@@ -241,7 +241,31 @@ function createApiKeyTestService({
     };
   }
 
+  async function discoverModels({ req, userId, apiKeyId, providerId }) {
+    const credentials = await resolveCredentials({ req, userId, apiKeyId, providerId });
+    if (!credentials.baseUrl) {
+      throw Object.assign(new Error('Base URL is required for this provider.'), { status: 400, expose: true });
+    }
+    if (!credentials.apiKey) {
+      throw Object.assign(new Error('API key is required.'), { status: 400, expose: true });
+    }
+    const result = await testModelList(credentials);
+    if (!result.ok && !result.skipped) {
+      throw Object.assign(new Error(result.error || 'Model list request failed.'), { status: result.status || 502, expose: true });
+    }
+    const fallbackModels = result.skipped
+      ? getProviderDefaultModels(credentials.providerId).map((id) => ({ id }))
+      : result.models;
+    return {
+      apiKeyId,
+      providerId: credentials.providerId,
+      models: fallbackModels,
+      source: result.skipped ? 'provider-defaults' : 'upstream',
+    };
+  }
+
   return {
+    discoverModels,
     testApiKey,
   };
 }

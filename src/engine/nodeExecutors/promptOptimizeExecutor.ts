@@ -160,7 +160,7 @@ export async function executePromptOptimize(
         mode: 'model',
         modelSourceUsed: resolved.source,
         modelContext: makeModelContext(
-          { instanceId: resolved.instanceId, platformModelId: resolved.platformModelId, model: resolved.model },
+          { instanceId: resolved.instanceId, apiKeyModelId: resolved.apiKeyModelId, platformModelId: resolved.platformModelId, model: resolved.model },
           { sourceNodeType: 'promptOptimize' }
         ),
       };
@@ -184,7 +184,7 @@ export async function executePromptOptimize(
       mode: 'model',
       modelSourceUsed: resolved.source,
       modelContext: makeModelContext(
-        { instanceId: resolved.instanceId, platformModelId: resolved.platformModelId, model: resolved.model },
+        { instanceId: resolved.instanceId, apiKeyModelId: resolved.apiKeyModelId, platformModelId: resolved.platformModelId, model: resolved.model },
         { sourceNodeType: 'promptOptimize' }
       ),
     };

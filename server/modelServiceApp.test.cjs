@@ -130,9 +130,12 @@ test('model-service identity is required only for model boundaries', () => {
   assert.equal(modelServiceIdentityRequired('/api/chat'), true);
   assert.equal(modelServiceIdentityRequired('/api/claude'), true);
   assert.equal(modelServiceIdentityRequired('/api/model-capabilities'), true);
+  assert.equal(modelServiceIdentityRequired('/api/model-catalog'), true);
   assert.equal(modelServiceIdentityRequired('/api/model-capability-presets'), true);
   assert.equal(modelServiceIdentityRequired('/api/models'), true);
   assert.equal(modelServiceIdentityRequired('/api/providers'), true);
+  assert.equal(modelServiceIdentityRequired('/api/platform-models'), true);
+  assert.equal(modelServiceIdentityRequired('/api/admin/platform-models'), true);
   assert.equal(modelServiceIdentityRequired('/api/proxy'), true);
   assert.equal(modelServiceIdentityRequired('/api/admin/health'), true);
   assert.equal(modelServiceIdentityRequired('/api/health'), false);

@@ -115,7 +115,7 @@ function shouldCollectMultipleInputs(inputKey: string, value: unknown): boolean 
 
 function modelContextFromNode(node: Node<NodeData>): TextModelContext | null {
   const outputContext = node.data.outputs?.modelContext as TextModelContext | undefined;
-  if (outputContext?.instanceId || outputContext?.platformModelId) {
+  if (outputContext?.instanceId || outputContext?.apiKeyModelId || outputContext?.platformModelId) {
     return {
       ...outputContext,
       sourceNodeId: outputContext.sourceNodeId || node.id,
@@ -129,6 +129,7 @@ function modelContextFromNode(node: Node<NodeData>): TextModelContext | null {
   return makeModelContext(
     {
       instanceId: typeof node.data.config?.instanceId === 'string' ? node.data.config.instanceId : undefined,
+      apiKeyModelId: typeof node.data.config?.apiKeyModelId === 'string' ? node.data.config.apiKeyModelId : undefined,
       platformModelId: typeof node.data.config?.platformModelId === 'string' ? node.data.config.platformModelId : undefined,
       model: typeof node.data.config?.model === 'string' ? node.data.config.model : undefined,
     },
@@ -150,7 +151,7 @@ function getUpstreamModelContext(
     const sourceNode = nodeMap.get(edge.source);
     if (!sourceNode) continue;
     const context = modelContextFromNode(sourceNode);
-    if (context?.instanceId || context?.platformModelId) return context;
+    if (context?.instanceId || context?.apiKeyModelId || context?.platformModelId) return context;
   }
   return null;
 }
@@ -382,6 +383,7 @@ function makeExecutionFingerprint(node: Node<NodeData>, inputs: NodeInputs, cont
       modelContext: context.modelContext
         ? {
           instanceId: context.modelContext.instanceId,
+          apiKeyModelId: context.modelContext.apiKeyModelId,
           platformModelId: context.modelContext.platformModelId,
           model: context.modelContext.model,
           sourceNodeId: context.modelContext.sourceNodeId,

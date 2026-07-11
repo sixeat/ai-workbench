@@ -16,6 +16,9 @@ const {
   getTask,
   listAuditLogs,
   upsertApiKey,
+  upsertApiKeyModel,
+  upsertPlatformModel,
+  upsertPlatformModelRoute,
 } = require('./db.cjs');
 const { creditRepository } = require('./repositories/creditRepository.cjs');
 const { createCreditService } = require('./services/creditService.cjs');
@@ -134,6 +137,88 @@ test('user-owned saved key does not consume credits in the first version', () =>
   assert.equal(task.creditStatus, 'free');
   assert.equal(task.creditKeyScope, 'user_key');
   assert.equal(creditRepository.getAccount(user.id).balance, 0);
+});
+
+test('user-owned model instance remains free and resolves by stable model ID', () => {
+  const user = testUser('credit-user-model@example.com');
+  const key = upsertApiKey({
+    baseUrl: 'https://api.example.com',
+    encryptedKey: 'fake-encrypted-key',
+    keyScope: 'user',
+    name: 'User key model',
+    ownerUserId: user.id,
+    providerId: 'openai-compatible',
+  });
+  const model = upsertApiKeyModel({
+    apiKeyId: key.id,
+    upstreamModel: 'gpt-image-2',
+    modelProviderId: 'openai-compatible',
+    adapterId: 'openai-image',
+    displayName: 'GPT Image 2',
+    capabilities: { imageGeneration: true, image: { maxImages: 1 } },
+    capabilitySource: 'matched-rules',
+    discoveryStatus: 'active',
+    isEnabled: true,
+  });
+
+  const task = createBillableTask(user, 'image', {
+    apiKeyModelId: model.id,
+    model: 'client-model-is-ignored',
+    prompt: 'free with a stable model ID',
+  });
+
+  assert.equal(task.creditCost, 0);
+  assert.equal(task.creditStatus, 'free');
+  assert.equal(task.creditKeyScope, 'user_key');
+});
+
+test('platform capability validation happens before credit debit', () => {
+  const user = testUser('credit-platform-contract@example.com');
+  creditRepository.adjustAccount({ amount: 100, userId: user.id });
+  const key = upsertApiKey({
+    baseUrl: 'https://api.example.com',
+    encryptedKey: 'fake-encrypted-key',
+    keyScope: 'server',
+    name: 'Server image key',
+    ownerUserId: user.id,
+    providerId: 'openai-compatible',
+  });
+  const apiKeyModel = upsertApiKeyModel({
+    apiKeyId: key.id,
+    upstreamModel: 'gpt-image-2',
+    modelProviderId: 'openai-compatible',
+    adapterId: 'openai-image',
+    displayName: 'GPT Image 2',
+    capabilities: { imageGeneration: true, image: { maxImages: 4 } },
+    capabilitySource: 'matched-rules',
+    discoveryStatus: 'active',
+    isEnabled: true,
+  });
+  const platformModel = upsertPlatformModel({
+    displayName: 'Platform Image',
+    capability: 'imageGeneration',
+    model: 'platform-image',
+    capabilities: { imageGeneration: true, image: { maxImages: 1 } },
+    isEnabled: true,
+  });
+  upsertPlatformModelRoute({
+    platformModelId: platformModel.id,
+    apiKeyId: key.id,
+    apiKeyModelId: apiKeyModel.id,
+    providerId: 'openai-compatible',
+    upstreamModel: 'gpt-image-2',
+    isEnabled: true,
+  });
+
+  assert.throws(
+    () => createBillableTask(user, 'image', {
+      platformModelId: platformModel.id,
+      prompt: 'too many images',
+      n: 2,
+    }),
+    /at most 1 image/
+  );
+  assert.equal(creditRepository.getAccount(user.id).balance, 100);
 });
 
 test('refund restores charged credits only once', () => {

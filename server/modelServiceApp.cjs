@@ -4,10 +4,14 @@ const { DB_PATH } = require('./dataPaths.cjs');
 const { DEFAULT_USER_ID } = require('./defaults.cjs');
 const { assetRepository } = require('./repositories/assetRepository.cjs');
 const { authRepository } = require('./repositories/authRepository.cjs');
+const { apiKeyModelRepository } = require('./repositories/apiKeyModelRepository.cjs');
+const { platformModelRepository } = require('./repositories/platformModelRepository.cjs');
 const { taskRepository } = require('./repositories/taskRepository.cjs');
 const { registerApiKeyRoutes } = require('./routes/apiKeyRoutes.cjs');
 const { registerHealthRoutes } = require('./routes/healthRoutes.cjs');
+const { registerModelCatalogRoutes } = require('./routes/modelCatalogRoutes.cjs');
 const { registerModelProxyRoutes } = require('./routes/modelProxyRoutes.cjs');
+const { registerPlatformModelRoutes } = require('./routes/platformModelRoutes.cjs');
 const { registerProviderRoutes } = require('./routes/providerRoutes.cjs');
 const { createApiKeyTestService } = require('./services/apiKeyTestService.cjs');
 const { createCredentialService } = require('./services/credentialService.cjs');
@@ -38,10 +42,13 @@ const MODEL_SERVICE_PROTECTED_PREFIXES = [
   '/api/api-keys',
   '/api/chat',
   '/api/claude',
+  '/api/model-catalog',
   '/api/model-capabilities',
   '/api/model-capability-presets',
   '/api/models',
   '/api/providers',
+  '/api/platform-models',
+  '/api/admin/platform-models',
   '/api/proxy',
 ];
 
@@ -137,6 +144,18 @@ function createModelServiceApp({ env = process.env, startWorkers } = {}) {
     maxUserApiKeys: requestConfig.maxUserApiKeys,
     requireAdmin,
     testApiKey: apiKeyTestService.testApiKey,
+  });
+
+  registerModelCatalogRoutes(app, {
+    discoverModels: apiKeyTestService.discoverModels,
+    getRequestUserId,
+    modelRepository: apiKeyModelRepository,
+    platformModelRepository,
+  });
+
+  registerPlatformModelRoutes(app, {
+    platformModelRepository,
+    requireAdmin,
   });
 
   registerProviderRoutes(app);

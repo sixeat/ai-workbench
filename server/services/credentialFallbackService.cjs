@@ -11,8 +11,6 @@ function shouldFallbackAfterUpstreamResult(result = {}) {
   return status === 401
     || status === 403
     || status === 408
-    || status === 409
-    || status === 425
     || status === 429
     || status >= 500;
 }

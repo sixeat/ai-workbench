@@ -24,6 +24,7 @@ interface ImageGenerationMeta {
   strength: number;
   responseFormat: string;
   apiKeyId?: string;
+  apiKeyModelId?: string;
   platformModelId?: string;
   providerId?: string;
   promptExtend: boolean;
@@ -103,6 +104,7 @@ async function generateOne(
 
   const data = await proxyOpenAIImage(baseUrl, apiKey, body, {
     apiKeyId: meta.apiKeyId,
+    apiKeyModelId: meta.apiKeyModelId,
     platformModelId: meta.platformModelId,
     providerId: meta.providerId,
   });
@@ -119,6 +121,7 @@ export async function executeImageGen(
   context?: ExecutionContext
 ): Promise<NodeOutputs> {
   const instanceId = String(config.instanceId || '');
+  const apiKeyModelId = String(config.apiKeyModelId || '');
   const platformModelId = String(config.platformModelId || '');
   const promptInput = Array.isArray(inputs.prompt)
     ? inputs.prompt.map((item) => item?.type === 'parameter' ? '' : toText(item)).filter(Boolean).join('\n')
@@ -140,10 +143,10 @@ export async function executeImageGen(
   const responseFormat = String(config.responseFormat || 'b64_json');
   const model = String(config.model || 'gpt-image-1');
 
-  if (!instanceId && !platformModelId) return { image: null, images: [], url: '', error: '请选择 API 实例' };
+  if (!instanceId && !apiKeyModelId && !platformModelId) return { image: null, images: [], url: '', error: '请选择模型' };
 
   const runtimeConfig = instanceId ? getInstanceRuntimeConfig(instanceId) : null;
-  if (!platformModelId && !runtimeConfig) return { image: null, images: [], url: '', error: 'API 实例配置无效' };
+  if (!platformModelId && !apiKeyModelId && !runtimeConfig) return { image: null, images: [], url: '', error: '模型配置无效' };
 
   const { baseUrl, apiKey, apiKeyId, provider } = runtimeConfig || { baseUrl: '', apiKey: '', apiKeyId: undefined, provider: undefined };
   const meta = {
@@ -157,6 +160,7 @@ export async function executeImageGen(
     strength,
     responseFormat,
     apiKeyId,
+    apiKeyModelId: apiKeyModelId || undefined,
     platformModelId: platformModelId || undefined,
     providerId: provider?.id,
     promptExtend: Boolean(config.promptExtend),

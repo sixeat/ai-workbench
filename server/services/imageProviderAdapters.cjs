@@ -106,7 +106,9 @@ const adapters = {
   },
 };
 
-function getImageProviderAdapter(providerId) {
+function getImageProviderAdapter(providerId, adapterId = '') {
+  if (adapterId === 'dashscope-image') return adapters['aliyun-bailian'];
+  if (adapterId === 'openai-image') return adapters['openai-compatible'];
   return adapters[providerId] || adapters['openai-compatible'];
 }
 

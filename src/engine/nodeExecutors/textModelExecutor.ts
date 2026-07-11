@@ -33,7 +33,7 @@ export async function executeTextModel(
       reasoning: '',
       task: result.task,
       modelContext: makeModelContext(
-        { instanceId: resolved.instanceId, platformModelId: resolved.platformModelId, model: resolved.model },
+        { instanceId: resolved.instanceId, apiKeyModelId: resolved.apiKeyModelId, platformModelId: resolved.platformModelId, model: resolved.model },
         { sourceNodeType: 'textModel' }
       ),
       modelSourceUsed: resolved.source,

@@ -170,6 +170,63 @@ test('saved user keys can still be used directly by their owner', async () => {
   assert.equal(credentials.providerId, 'openai-compatible');
 });
 
+test('personal model ID fixes the key, upstream model, adapter, and owner', async () => {
+  let encryptedKey = '';
+  const model = {
+    id: 'personal-model',
+    apiKeyId: 'user-key',
+    upstreamModel: 'gpt-image-2',
+    modelProviderId: 'openai-compatible',
+    adapterId: 'openai-image',
+    capabilities: { imageGeneration: true },
+    discoveryStatus: 'active',
+    isEnabled: true,
+  };
+  const service = createCredentialService({
+    apiKeyModelRepository: {
+      getApiKeyModelForUser: (id, userId) => id === model.id && userId === 'ordinary-user' ? model : null,
+    },
+    apiKeyRepository: {
+      getApiKeyForUser: (id, userId) => id === 'user-key' && userId === 'ordinary-user' ? {
+        id,
+        keyScope: 'user',
+        providerId: 'openai-compatible',
+        baseUrl: 'https://api.example.com',
+        encryptedKey,
+        isEnabled: true,
+        ownerUserId: userId,
+      } : null,
+    },
+    keyEncryptionSecret: '0123456789abcdef0123456789abcdef',
+  });
+  encryptedKey = service.encryptSecret('sk-personal-model');
+
+  const credentials = await service.resolveApiCredentials({
+    userId: 'ordinary-user',
+    body: {
+      apiKeyModelId: 'personal-model',
+      model: 'attacker-selected-model',
+      providerId: 'attacker-provider',
+    },
+    secrets: {},
+  });
+
+  assert.equal(credentials.apiKey, 'sk-personal-model');
+  assert.equal(credentials.apiKeyId, 'user-key');
+  assert.equal(credentials.apiKeyModelId, 'personal-model');
+  assert.equal(credentials.model, 'gpt-image-2');
+  assert.equal(credentials.providerId, 'openai-compatible');
+  assert.equal(credentials.adapterId, 'openai-image');
+  await assert.rejects(
+    () => service.resolveApiCredentials({
+      userId: 'other-user',
+      body: { apiKeyModelId: 'personal-model' },
+      secrets: {},
+    }),
+    /not available for this user/
+  );
+});
+
 test('credential usage policy blocks disabled capabilities and unlisted models', () => {
   assert.equal(
     credentialUsageError({
@@ -218,6 +275,7 @@ test('platform model credentials resolve enabled server routes with fallback cre
       displayName: '平台图片 2.0',
       capability: 'imageGeneration',
       model: 'image2.0',
+      capabilities: { imageGeneration: true, image: { maxImages: 1 } },
       isEnabled: true,
     } : null,
     listPlatformModelRoutes: () => [
@@ -225,6 +283,7 @@ test('platform model credentials resolve enabled server routes with fallback cre
         id: 'route-primary',
         platformModelId: 'platform-image',
         apiKeyId: 'server-key-primary',
+        apiKeyModelId: 'model-primary',
         providerId: 'aliyun-bailian',
         upstreamModel: 'wanx2.1-t2i-turbo',
         priority: 1,
@@ -234,6 +293,7 @@ test('platform model credentials resolve enabled server routes with fallback cre
         id: 'route-fallback',
         platformModelId: 'platform-image',
         apiKeyId: 'server-key-fallback',
+        apiKeyModelId: 'model-fallback',
         providerId: 'openai-compatible',
         upstreamModel: 'gpt-image-1',
         priority: 2,
@@ -243,6 +303,7 @@ test('platform model credentials resolve enabled server routes with fallback cre
         id: 'route-user-key',
         platformModelId: 'platform-image',
         apiKeyId: 'user-key',
+        apiKeyModelId: 'model-user',
         providerId: 'openai-compatible',
         upstreamModel: 'should-not-use',
         priority: 3,
@@ -278,8 +339,43 @@ test('platform model credentials resolve enabled server routes with fallback cre
       },
     }[id] || null),
   };
+  const apiKeyModelRepository = {
+    getApiKeyModel: (id) => ({
+      'model-primary': {
+        id,
+        apiKeyId: 'server-key-primary',
+        upstreamModel: 'wanx2.1-t2i-turbo',
+        modelProviderId: 'aliyun-bailian',
+        adapterId: 'dashscope-image',
+        capabilities: { imageGeneration: true, image: { maxImages: 4 } },
+        discoveryStatus: 'active',
+        isEnabled: true,
+      },
+      'model-fallback': {
+        id,
+        apiKeyId: 'server-key-fallback',
+        upstreamModel: 'gpt-image-1',
+        modelProviderId: 'openai-compatible',
+        adapterId: 'openai-image',
+        capabilities: { imageGeneration: true, image: { maxImages: 4 } },
+        discoveryStatus: 'active',
+        isEnabled: true,
+      },
+      'model-user': {
+        id,
+        apiKeyId: 'user-key',
+        upstreamModel: 'should-not-use',
+        modelProviderId: 'openai-compatible',
+        adapterId: 'openai-image',
+        capabilities: { imageGeneration: true },
+        discoveryStatus: 'active',
+        isEnabled: true,
+      },
+    }[id] || null),
+  };
   const service = createCredentialService({
     apiKeyRepository,
+    apiKeyModelRepository,
     keyEncryptionSecret: '0123456789abcdef0123456789abcdef',
     platformModelRepository,
   });
@@ -299,6 +395,7 @@ test('platform model credentials resolve enabled server routes with fallback cre
   assert.equal(credentials.model, 'wanx2.1-t2i-turbo');
   assert.equal(credentials.platformModelId, 'platform-image');
   assert.equal(credentials.platformRouteId, 'route-primary');
+  assert.equal(credentials.modelCapabilities.image.maxImages, 1);
   assert.equal(credentials.fallbackCredentials.length, 1);
   assert.equal(credentials.fallbackCredentials[0].apiKey, 'sk-fallback');
   assert.equal(credentials.fallbackCredentials[0].platformRouteId, 'route-fallback');
@@ -348,6 +445,11 @@ test('platform model credentials reject disabled models and models without enabl
       body: { platformModelId: 'enabled-model' },
       secrets: {},
     }),
-    /Platform model has no enabled server route/
+    (error) => {
+      assert.equal(error.message, 'Platform model has no enabled server route.');
+      assert.equal(error.status, 409);
+      assert.equal(error.expose, true);
+      return true;
+    }
   );
 });

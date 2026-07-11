@@ -22,8 +22,11 @@ import {
   type ProxyRegistrationPolicy,
 } from './lib/apiProxy';
 import { preserveLoginFormSnapshot, resolveLoginSubmission } from './lib/authFormState';
+import { migrateWorkflowModelSelections } from './lib/modelSelectionMigration';
 import { cn } from './lib/utils';
+import { useApiStore } from './stores/apiStore';
 import { useCanvasStore } from './stores/canvasStore';
+import { useModelCatalogStore } from './stores/modelCatalogStore';
 import { getWorkflow, saveWorkflow, setWorkflowStorageMode, type WorkflowProject } from './stores/workflowDb';
 
 const AccountSecurityPanel = lazy(() =>
@@ -622,6 +625,8 @@ function App() {
   const [workflowSaveStatus, setWorkflowSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [workflowSaveMessage, setWorkflowSaveMessage] = useState('');
   const { nodes, edges, clearCanvas, setEdges, setNodes } = useCanvasStore();
+  const { instances } = useApiStore();
+  const { loadCatalog, personalModels } = useModelCatalogStore();
 
   const refreshCredits = useCallback(async () => {
     try {
@@ -661,11 +666,12 @@ function App() {
 
   useEffect(() => {
     if (!authInfo || (!authInfo.authenticated && authInfo.requireLogin)) return;
+    void loadCatalog();
     const timer = window.setInterval(() => {
       void refreshCredits();
     }, 15_000);
     return () => window.clearInterval(timer);
-  }, [authInfo, refreshCredits]);
+  }, [authInfo, loadCatalog, refreshCredits]);
 
   const handleLogout = async () => {
     try {
@@ -682,7 +688,8 @@ function App() {
   };
 
   const handleLoadProject = (project: WorkflowProject) => {
-    setNodes(project.nodes);
+    const migrated = migrateWorkflowModelSelections(project.nodes, personalModels, instances);
+    setNodes(migrated.nodes);
     setEdges(project.edges);
     setCurrentWorkflowId(project.id);
     setCurrentWorkflowName(project.name);
@@ -738,7 +745,9 @@ function App() {
         id,
         name,
         description: existing?.description || '',
-        nodes: JSON.parse(JSON.stringify(nodes)),
+        nodes: JSON.parse(JSON.stringify(
+          migrateWorkflowModelSelections(nodes, personalModels, instances).nodes
+        )),
         edges: JSON.parse(JSON.stringify(edges)),
         createdAt: existing?.createdAt || now,
         updatedAt: now,
@@ -759,7 +768,7 @@ function App() {
       window.alert(`保存失败：${message}`);
       resetWorkflowSaveStatus(3200);
     }
-  }, [currentWorkflowId, currentWorkflowName, edges, nodes, resetWorkflowSaveStatus]);
+  }, [currentWorkflowId, currentWorkflowName, edges, instances, nodes, personalModels, resetWorkflowSaveStatus]);
 
   const handleNewWorkflow = () => {
     if (nodes.length > 0 && !window.confirm('新建工作流会清空当前画布，确定继续吗？')) return;

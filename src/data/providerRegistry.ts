@@ -62,6 +62,22 @@ export const FALLBACK_PROVIDER_TEMPLATES: ProviderTemplate[] = [
     defaultModels: ['doubao-seedance-2-0-mini-260615'],
   },
   {
+    id: 'xai',
+    name: 'xAI Grok',
+    description: 'xAI Grok API，支持文本、模型列表和 Grok Imagine 视频生成。',
+    category: 'multi',
+    authType: 'bearer',
+    defaultBaseUrl: 'https://api.x.ai',
+    endpoints: {
+      chat: '/v1/chat/completions',
+      video: '/v1/videos/generations',
+      models: '/v1/models',
+    },
+    requestFormat: 'openai',
+    supportedNodes: ['textModel', 'videoGen', 'multiImageVideo', 'script', 'shotSplit', 'promptOptimize'],
+    defaultModels: ['grok-4', 'grok-imagine-video', 'grok-imagine-video-1.5'],
+  },
+  {
     id: 'aliyun-bailian',
     name: '阿里云百炼',
     description: '百炼 / DashScope API，支持通义千问文本、视觉理解、万相图片和视频生成。',

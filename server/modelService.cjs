@@ -19,6 +19,10 @@ function printStartup() {
   console.log('    GET  /api/api-keys');
   console.log('    POST /api/api-keys');
   console.log('    POST /api/api-keys/:apiKeyId/test');
+  console.log('    POST /api/api-keys/:apiKeyId/models/discover');
+  console.log('    GET  /api/model-catalog');
+  console.log('    GET  /api/platform-models');
+  console.log('    GET  /api/admin/platform-models');
   console.log('    POST /api/chat');
   console.log('    POST /api/claude');
   console.log('    POST /api/proxy');

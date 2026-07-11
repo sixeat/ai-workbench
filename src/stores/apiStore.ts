@@ -160,7 +160,7 @@ export const useApiStore = create<ApiStoreState & ApiStoreActions>()(
               apiKey: '',
               baseUrl: key.baseUrl || undefined,
               customHeaders: existing?.customHeaders,
-              models: key.models?.length ? key.models : existing?.models?.length ? existing.models : getProviderDefaultModels(key.providerId),
+              models: Array.isArray(key.models) ? key.models : [],
               modelFetchMode: existing?.modelFetchMode || 'manual',
               isEnabled: key.isEnabled,
               createdAt: existing?.createdAt || key.createdAt || new Date().toISOString(),

@@ -8,6 +8,7 @@ import type { NodeConfig } from '../../types/nodes';
 
 export interface TextGenerationOptions {
   instanceId?: string;
+  apiKeyModelId?: string;
   platformModelId?: string;
   model?: string;
   system?: string;
@@ -50,12 +51,13 @@ function getGlobalDefaultModelContext(): TextModelContext | null {
 }
 
 export function makeModelContext(
-  config: { instanceId?: string; model?: string; platformModelId?: string },
+  config: { instanceId?: string; apiKeyModelId?: string; model?: string; platformModelId?: string },
   meta: Partial<TextModelContext> = {}
 ): TextModelContext | null {
-  if (!config.instanceId && !config.platformModelId) return null;
+  if (!config.instanceId && !config.apiKeyModelId && !config.platformModelId) return null;
   return {
     instanceId: config.instanceId ? String(config.instanceId) : undefined,
+    apiKeyModelId: config.apiKeyModelId ? String(config.apiKeyModelId) : undefined,
     platformModelId: config.platformModelId ? String(config.platformModelId) : undefined,
     model: String(config.model || 'gpt-4o'),
     ...meta,
@@ -67,7 +69,8 @@ export function resolveTextGenerationOptions(
   context: ExecutionContext,
   defaults: Partial<TextGenerationOptions> = {}
 ): ResolvedTextGenerationOptions | null {
-  const modelSource = String(config.modelSource || (config.instanceId ? 'manual' : 'inherit')) as ModelSource;
+  const configuredSource = String(config.modelSource || (config.instanceId || config.apiKeyModelId ? 'manual' : 'inherit'));
+  const modelSource = (configuredSource === 'custom' ? 'manual' : configuredSource) as ModelSource;
   if (modelSource === 'localOnly') return null;
 
   const base = {
@@ -77,11 +80,12 @@ export function resolveTextGenerationOptions(
   };
 
   if (modelSource === 'manual') {
-    if (!config.instanceId) return null;
+    if (!config.instanceId && !config.apiKeyModelId) return null;
     return {
       ...defaults,
       ...base,
-      instanceId: String(config.instanceId),
+      instanceId: config.instanceId ? String(config.instanceId) : undefined,
+      apiKeyModelId: config.apiKeyModelId ? String(config.apiKeyModelId) : undefined,
       model: String(config.model || defaults.model || 'gpt-4o'),
       prompt: defaults.prompt || '',
       source: 'manual',
@@ -102,11 +106,12 @@ export function resolveTextGenerationOptions(
 
   if (modelSource === 'inherit') {
     const upstream = context.modelContext;
-    if (upstream?.instanceId || upstream?.platformModelId) {
+    if (upstream?.instanceId || upstream?.apiKeyModelId || upstream?.platformModelId) {
       return {
         ...defaults,
         ...base,
         instanceId: upstream.instanceId,
+        apiKeyModelId: upstream.apiKeyModelId,
         platformModelId: upstream.platformModelId,
         model: upstream.model || defaults.model || 'gpt-4o',
         prompt: defaults.prompt || '',
@@ -145,7 +150,7 @@ function responseTask(response: unknown): unknown {
 }
 
 export async function generateTextWithMetadata(options: TextGenerationOptions): Promise<TextGenerationResult> {
-  if (!options.instanceId && !options.platformModelId) throw new Error('请选择 API 实例');
+  if (!options.instanceId && !options.apiKeyModelId && !options.platformModelId) throw new Error('请选择模型');
   if (!options.prompt.trim()) throw new Error('文本生成需要 prompt 输入');
 
   if (options.platformModelId) {
@@ -194,7 +199,7 @@ export async function generateTextWithMetadata(options: TextGenerationOptions): 
         max_tokens: maxTokens,
         upstreamTaskIds: options.upstreamTaskIds,
       },
-      { apiKeyId, providerId: provider?.id }
+      { apiKeyId, apiKeyModelId: options.apiKeyModelId, providerId: provider?.id }
     );
     return {
       text: response.choices[0]?.message?.content || '',
@@ -215,7 +220,7 @@ export async function generateTextWithMetadata(options: TextGenerationOptions): 
         temperature,
         upstreamTaskIds: options.upstreamTaskIds,
       },
-      { apiKeyId, providerId: provider?.id }
+      { apiKeyId, apiKeyModelId: options.apiKeyModelId, providerId: provider?.id }
     );
     return {
       text: response.content[0]?.text || '',

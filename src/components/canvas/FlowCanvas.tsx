@@ -55,7 +55,7 @@ export function FlowCanvas() {
   });
 
   const onNodeClick = useCallback((event: React.MouseEvent, node: any) => {
-    if (event.shiftKey || event.metaKey) {
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
       toggleSelectedNodeId(node.id);
     } else {
       setSelectedNodeId(node.id);
@@ -148,7 +148,7 @@ export function FlowCanvas() {
         className="bg-canvas-bg"
         deleteKeyCode={['Backspace', 'Delete']}
         selectionKeyCode={null}
-        multiSelectionKeyCode={['Shift', 'Meta']}
+        multiSelectionKeyCode={['Shift', 'Control', 'Meta']}
         selectionOnDrag
       >
         <Background

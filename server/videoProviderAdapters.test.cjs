@@ -4,6 +4,7 @@ const test = require('node:test');
 const {
   buildBailianContentForValidation,
   buildBailianVideoBody,
+  buildXaiVideoBody,
   findFirstVideoUrl,
   getVideoProviderAdapter,
   normalizeArkContent,
@@ -83,18 +84,56 @@ test('bailian validation content keeps only media type markers', () => {
   );
 });
 
+test('xai adapter builds video generation body and normalizes resolution', () => {
+  const adapter = getVideoProviderAdapter('xai');
+  const capabilityBody = adapter.buildCapabilityBody({
+    body: {
+      model: 'grok-imagine-video-1.5',
+      prompt: 'cinematic dragon fight',
+      mode: 'image-to-video',
+      images: ['/api/assets/first'],
+      ratio: '16:9',
+      resolution: '720P',
+      duration: 6,
+      generateAudio: true,
+    },
+    req,
+  });
+  const requestBody = buildXaiVideoBody(
+    { mode: 'image-to-video' },
+    capabilityBody,
+    req
+  );
+
+  assert.deepEqual(requestBody, {
+    model: 'grok-imagine-video-1.5',
+    prompt: 'cinematic dragon fight',
+    duration: 6,
+    aspect_ratio: '16:9',
+    resolution: '720p',
+    image: { url: 'https://workbench.example/api/assets/first' },
+  });
+});
+
 test('video adapter parses upstream task state and video URLs', () => {
   assert.deepEqual(summarizeVideoUpstream({ output: { task_id: 'task-1', task_status: 'SUCCEEDED' } }), {
     taskId: 'task-1',
     status: 'SUCCEEDED',
   });
+  assert.deepEqual(summarizeVideoUpstream({ request_id: 'xai-task', status: 'pending' }), {
+    taskId: 'xai-task',
+    status: 'pending',
+  });
   assert.equal(normalizeVideoStatus({ output: { task_status: 'SUCCEEDED' } }), 'succeeded');
   assert.equal(normalizeVideoStatus({ output: { task_status: 'FAILED' } }), 'failed');
+  assert.equal(normalizeVideoStatus({ status: 'done' }), 'succeeded');
   assert.equal(findFirstVideoUrl({ output: { video_url: { url: 'https://cdn.example/result.mp4' } } }), 'https://cdn.example/result.mp4');
+  assert.equal(findFirstVideoUrl({ video: { url: 'https://cdn.example/xai-result.mp4' } }), 'https://cdn.example/xai-result.mp4');
 });
 
 test('video provider registry returns provider specific endpoints', () => {
   assert.equal(getVideoProviderAdapter('seedance').buildQueryRequest({ taskId: 'a', apiKey: 'k' }).endpoint, '/api/v3/contents/generations/tasks/a');
   assert.equal(getVideoProviderAdapter('aliyun-bailian').buildQueryRequest({ taskId: 'a', apiKey: 'k' }).endpoint, '/api/v1/tasks/a');
+  assert.equal(getVideoProviderAdapter('xai').buildQueryRequest({ taskId: 'a b', apiKey: 'k' }).endpoint, '/v1/videos/a%20b');
   assert.equal(getVideoProviderAdapter('unknown').id, 'seedance');
 });

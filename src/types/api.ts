@@ -44,6 +44,10 @@ export interface ApiKeyAllowedCapabilities {
   videoGeneration?: boolean;
 }
 
+export type ModelSelection =
+  | { source: 'platform'; platformModelId: string }
+  | { source: 'personal'; apiKeyModelId: string };
+
 export interface AuthConfig {
   type: 'bearer' | 'apiKey' | 'custom';
   apiKey: string;

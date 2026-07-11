@@ -26,10 +26,12 @@ import {
   summarizeModelCapabilityUsage,
   validateNodeCapabilityUsage,
 } from '../../lib/modelCapabilities';
+import { personalModelDisplayName, personalModelSupportsNode } from '../../lib/modelCatalog';
 import { formatNodeRunTaskStatus, shortNodeRunTaskId, uniqueNodeRunAssetIds } from '../../lib/nodeRunDisplay';
 import { useApiStore } from '../../stores/apiStore';
 import { useCanvasStore } from '../../stores/canvasStore';
 import { platformModelSupportsNode, usePlatformModelStore } from '../../stores/platformModelStore';
+import { useModelCatalogStore } from '../../stores/modelCatalogStore';
 import { NODE_COLORS, type ConfigField, type NodeData, type NodeRunSummary, type NodeType } from '../../types/nodes';
 import { DarkSelect, type DarkSelectGroup } from '../ui/DarkSelect';
 import { PanelButton } from '../ui/PanelButton';
@@ -186,7 +188,12 @@ export function PropertiesPanel() {
     setSelectedNodeIds,
   } = useCanvasStore();
   const { instances } = useApiStore();
-  const { loadPlatformModels, models: platformModels } = usePlatformModelStore();
+  const { loadPlatformModels, models: legacyPlatformModels } = usePlatformModelStore();
+  const {
+    loadCatalog,
+    personalModels,
+    platformModels: catalogPlatformModels,
+  } = useModelCatalogStore();
   const [capabilityRecords, setCapabilityRecords] = useState<ProxyModelCapabilities[]>([]);
   const [capabilityError, setCapabilityError] = useState('');
   const [assetCollections, setAssetCollections] = useState<ProxyAssetCollection[]>([]);
@@ -209,6 +216,7 @@ export function PropertiesPanel() {
   const edgeData = (selectedEdge?.data || {}) as { targetKey?: unknown };
   const edgeTargetKey = String(edgeData.targetKey || selectedEdge?.targetHandle || '');
   const selectedInstanceId = stringConfigValue(selectedNode?.data.config?.instanceId);
+  const selectedApiKeyModelId = stringConfigValue(selectedNode?.data.config?.apiKeyModelId);
   const selectedPlatformModelId = stringConfigValue(selectedNode?.data.config?.platformModelId);
   const selectedModel = stringConfigValue(selectedNode?.data.config?.model);
   const lastRun = selectedNode?.data.lastRun as NodeRunSummary | undefined;
@@ -246,10 +254,15 @@ export function PropertiesPanel() {
       && apiInstanceSupportsNode(item, selectedNode.data.type)
     ));
   }, [instances, selectedNode]);
+  const platformModels = catalogPlatformModels.length > 0 ? catalogPlatformModels : legacyPlatformModels;
   const availablePlatformModels = useMemo(() => {
     if (!selectedNode) return [];
     return platformModels.filter((model) => platformModelSupportsNode(model, selectedNode.data.type));
   }, [platformModels, selectedNode]);
+  const availablePersonalModels = useMemo(() => {
+    if (!selectedNode) return [];
+    return personalModels.filter((model) => personalModelSupportsNode(model, selectedNode.data.type));
+  }, [personalModels, selectedNode]);
   const groupedAvailableInstances = useMemo(
     () => groupApiInstancesBySource(availableInstances),
     [availableInstances]
@@ -266,6 +279,9 @@ export function PropertiesPanel() {
   const selectedPlatformModel = selectedPlatformModelId
     ? platformModels.find((model) => model.id === selectedPlatformModelId) || null
     : null;
+  const selectedPersonalModel = selectedApiKeyModelId
+    ? personalModels.find((model) => model.id === selectedApiKeyModelId) || null
+    : null;
   const selectedInstance = selectedPlatformModel || selectedInstanceId.startsWith('server:') ? null : selectedInstanceId ? instances[selectedInstanceId] : null;
   const creditEstimate = useMemo(
     () => selectedNode ? estimateCreditCost(selectedNode, selectedInstance, Boolean(selectedPlatformModel)) : null,
@@ -273,8 +289,9 @@ export function PropertiesPanel() {
   );
   const modelCapabilities = useMemo(() => {
     if (hasModelCapabilities(selectedPlatformModel?.capabilities)) return selectedPlatformModel.capabilities;
+    if (hasModelCapabilities(selectedPersonalModel?.capabilities)) return selectedPersonalModel.capabilities;
     return resolveModelCapabilities(capabilityRecords, selectedInstance?.providerId, selectedModel);
-  }, [capabilityRecords, selectedInstance?.providerId, selectedModel, selectedPlatformModel?.capabilities]);
+  }, [capabilityRecords, selectedInstance?.providerId, selectedModel, selectedPersonalModel?.capabilities, selectedPlatformModel?.capabilities]);
 
   const capabilityRows = useMemo(() => {
     if (!selectedNode) return [];
@@ -323,7 +340,8 @@ export function PropertiesPanel() {
       })
       .catch((error: unknown) => setCapabilityError(error instanceof Error ? error.message : '模型能力加载失败'));
     void loadPlatformModels();
-  }, [loadPlatformModels]);
+    void loadCatalog();
+  }, [loadCatalog, loadPlatformModels]);
 
   useEffect(() => {
     if (addableRunAssets.length === 0) return;
@@ -436,6 +454,7 @@ export function PropertiesPanel() {
     const modelSource = String(selectedNode.data.config.modelSource || (selectedNode.data.config.platformModelId ? 'platform' : selectedNode.data.config.instanceId ? 'custom' : 'platform'));
     if (field.key === 'instanceId' && MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && !['manual', 'platform'].includes(modelSource)) return true;
     if (field.key === 'model' && modelSource === 'platform') return true;
+    if (field.key === 'model' && Boolean(stringConfigValue(selectedNode.data.config.apiKeyModelId))) return true;
     if (MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && field.key === 'model' && modelSource !== 'manual') return true;
     if (MODEL_SOURCE_NODE_TYPES.has(selectedNode.data.type) && ['temperature', 'maxTokens'].includes(field.key) && modelSource === 'localOnly') return true;
     return false;
@@ -451,10 +470,10 @@ export function PropertiesPanel() {
       value: model.id,
       description: model.model,
     }));
-    const instanceOptions = groupedAvailableInstances.custom.map((inst) => ({
-      label: inst.name,
-      value: inst.id,
-      description: getProviderTemplate(inst.providerId)?.name || inst.providerId,
+    const personalOptions = availablePersonalModels.map((model) => ({
+      label: personalModelDisplayName(model),
+      value: model.id,
+      description: model.upstreamModel,
     }));
 
     const updateSource = (nextSource: string) => {
@@ -463,19 +482,24 @@ export function PropertiesPanel() {
         handleConfigPatch({
           modelSource: 'platform',
           platformModelId: firstModel?.id || '',
+          apiKeyModelId: '',
+          modelSelection: firstModel ? { source: 'platform', platformModelId: firstModel.id } : undefined,
           instanceId: '',
           model: firstModel?.model || '',
         });
         return;
       }
 
-      const firstInstance = selectedInstance || availableInstances[0];
-      const firstModel = firstInstance?.models?.[0] || (firstInstance ? getProviderDefaultModels(firstInstance.providerId)[0] : '') || '';
+      const firstPersonalModel = selectedPersonalModel || availablePersonalModels[0];
       handleConfigPatch({
         modelSource: isTextHelper ? 'manual' : 'custom',
         platformModelId: '',
-        instanceId: firstInstance?.id || '',
-        model: firstModel,
+        apiKeyModelId: firstPersonalModel?.id || '',
+        modelSelection: firstPersonalModel
+          ? { source: 'personal', apiKeyModelId: firstPersonalModel.id }
+          : undefined,
+        instanceId: firstPersonalModel ? `user:${firstPersonalModel.apiKeyId}` : '',
+        model: firstPersonalModel?.upstreamModel || '',
       });
     };
 
@@ -509,6 +533,8 @@ export function PropertiesPanel() {
               handleConfigPatch({
                 modelSource: 'platform',
                 platformModelId,
+                apiKeyModelId: '',
+                modelSelection: { source: 'platform', platformModelId },
                 instanceId: '',
                 model: model?.model || '',
               });
@@ -516,18 +542,19 @@ export function PropertiesPanel() {
           />
         ) : (
           <DarkSelect
-            value={selectedInstanceId}
+            value={selectedApiKeyModelId}
             placeholder="选择我的 API"
             emptyLabel="你还没有可用于这个节点的个人 API"
-            groups={[{ options: instanceOptions }]}
-            onChange={(instanceId) => {
-              const instance = availableInstances.find((item) => item.id === instanceId);
-              const firstModel = instance?.models?.[0] || (instance ? getProviderDefaultModels(instance.providerId)[0] : '') || '';
+            groups={[{ options: personalOptions }]}
+            onChange={(apiKeyModelId) => {
+              const model = availablePersonalModels.find((item) => item.id === apiKeyModelId);
               handleConfigPatch({
                 modelSource: isTextHelper ? 'manual' : 'custom',
                 platformModelId: '',
-                instanceId,
-                model: firstModel,
+                apiKeyModelId,
+                modelSelection: { source: 'personal', apiKeyModelId },
+                instanceId: model ? `user:${model.apiKeyId}` : '',
+                model: model?.upstreamModel || '',
               });
             }}
           />
