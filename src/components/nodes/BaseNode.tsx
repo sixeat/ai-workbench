@@ -311,6 +311,8 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
   } = useModelCatalogStore();
   const { openPreview } = useImagePreviewStore();
   const [showModelSelect, setShowModelSelect] = useState(false);
+  const [editableValue, setEditableValue] = useState(() => editableField ? String(data.config[editableField.key] || '') : '');
+  const [isComposingText, setIsComposingText] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const [uploadError, setUploadError] = useState('');
   const [showImageLibrary, setShowImageLibrary] = useState(false);
@@ -423,6 +425,11 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
     },
     [data.config, editableField, id, updateNodeData]
   );
+
+  useEffect(() => {
+    if (!editableField || isComposingText) return;
+    setEditableValue(String(data.config[editableField.key] || ''));
+  }, [data.config, editableField, isComposingText]);
 
   const handleSelectCustomModel = useCallback(
     (option: CustomModelOption) => {
@@ -705,13 +712,31 @@ export function BaseNode({ id, data, selected }: BaseNodeProps) {
       <div className="px-3 py-2">
         {editableField && data.type !== 'imageInput' && (
           <textarea
-            value={data.config[editableField.key] || ''}
-            onChange={(event) => handleInputChange(event.target.value)}
+            value={editableValue}
+            onChange={(event) => {
+              const nextValue = event.target.value;
+              setEditableValue(nextValue);
+              const nativeInputEvent = event.nativeEvent as InputEvent;
+              if (!isComposingText && !nativeInputEvent.isComposing) handleInputChange(nextValue);
+            }}
+            onCompositionStart={() => setIsComposingText(true)}
+            onCompositionEnd={(event) => {
+              const nextValue = event.currentTarget.value;
+              setIsComposingText(false);
+              handleInputChange(nextValue);
+            }}
+            onBlur={() => {
+              if (!isComposingText) handleInputChange(editableValue);
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            onKeyUp={(event) => event.stopPropagation()}
+            onWheel={(event) => event.stopPropagation()}
             onClick={(event) => event.stopPropagation()}
             placeholder={editableField.placeholder}
             rows={2}
             className={cn(
-              'mb-2 min-h-[58px] w-full resize-y rounded-lg border border-gray-700/50 bg-gray-800/50 px-2.5 py-2 text-[11px] text-gray-200',
+              'nodrag nowheel mb-2 min-h-[58px] w-full resize-y rounded-lg border border-gray-700/50 bg-gray-800/50 px-2.5 py-2 text-[11px] text-gray-200',
               'placeholder:text-gray-600 focus:border-accent/50 focus:outline-none'
             )}
           />
