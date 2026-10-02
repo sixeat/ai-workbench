@@ -1,20 +1,16 @@
 {
-  "name": "ai-workbench",
+  "name": "ai-workbench-api",
   "private": true,
   "version": "0.3.0",
   "type": "module",
+  "description": "节点工作流平台后端。前端在 ../web（独立仓库）。",
   "scripts": {
-    "dev": "concurrently \"npm run dev:proxy\" \"npm run dev:web\"",
-    "dev:web": "vite --host 127.0.0.1",
-    "dev:proxy": "node server/index.cjs",
-    "build": "tsc -b && vite build",
     "check:deploy": "node server/deploymentCheck.cjs",
     "check:mojibake": "node scripts/checkMojibake.cjs",
     "check:registry-sync": "node scripts/checkRegistrySync.cjs",
     "export:node-registry": "node --import tsx scripts/exportNodeRegistry.mjs",
     "lint": "oxlint",
-    "test": "node --test --import tsx \"src/**/*.test.ts\" \"server/**/*.test.cjs\"",
-    "preview": "vite preview",
+    "test": "node --test server/**/*.test.cjs",
     "start": "node server/index.cjs",
     "start:api": "node server/api.cjs",
     "start:asset-service": "node server/assetService.cjs",
@@ -27,35 +23,15 @@
     "start:workflow-service": "node server/workflowService.cjs"
   },
   "dependencies": {
-    "@tailwindcss/postcss": "^4.3.1",
-    "@tauri-apps/api": "^2.11.1",
-    "@xyflow/react": "^12.11.1",
     "better-sqlite3": "^12.11.1",
-    "clsx": "^2.1.1",
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "framer-motion": "^12.41.0",
-    "lucide-react": "^1.21.0",
     "nodemailer": "^9.0.3",
-    "react": "^19.2.7",
-    "react-dom": "^19.2.7",
-    "tailwind-merge": "^3.6.0",
-    "undici": "^8.7.0",
-    "zustand": "^5.0.14"
+    "undici": "^8.7.0"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.3",
-    "@types/node": "^24.13.2",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.2",
-    "autoprefixer": "^10.5.2",
-    "concurrently": "^10.0.3",
     "oxlint": "^1.69.0",
-    "postcss": "^8.5.15",
-    "tailwindcss": "^4.3.1",
     "tsx": "^4.22.4",
-    "typescript": "~6.0.2",
-    "vite": "^8.1.0"
+    "typescript": "~6.0.2"
   }
 }

@@ -111,18 +111,23 @@ flowchart LR
 
 ## 常用命令
 
-开发：
+本项目是**纯后端**。前端在 `../web`（独立仓库），有自己的构建流程。
+
+启动：
 
 ```bash
-npm run dev
+npm start            # 等价于 node server/index.cjs
+npm run start:server # 先跑部署检查再启动
 ```
 
 检查：
 
 ```bash
-npx tsc -b --pretty false
-npm run lint
-npm run build
+npm test             # 594 测试
+npm run lint         # 期望 0 警告
+npm run check:mojibake
+npm run check:deploy
+node ../scripts/checkRegistrySync.cjs ../web   # 前端注册表副本是否同步
 ```
 
 服务器后台运行：
