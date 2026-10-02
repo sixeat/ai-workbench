@@ -1,12 +1,16 @@
 # 前端对接清单（后端 → 前端）
 
-> 面向对象：负责 `workflow-platform` 前端的 AI / 开发者。
+> 面向对象：负责 `web/` 前端的 AI / 开发者。
 > 后端已完成并验证。本清单说明**前端需要配合的改动**，按优先级排列。
 >
-> 后端仓库：`F:\Code_X\agent_work\ai-workbench`
-> 前端仓库：`F:\KimiData\kimi\Workspaces\AI-work\workflow-platform`
+> 项目结构：`F:\work\ai-workbench\` 下有 `api\`（后端）与 `web\`（前端）。
+> 下文路径均相对于项目根目录。
 >
 > 核对基准：后端 **740 测试 / 739 通过**，契约验证 **21/21 通过**。
+>
+> **进度更新（2026-10-02）**：下述两项 P0 已完成 ——
+> 视频轮询超时已提到 30 分钟（`web/src/lib/runner.js` 的 `callVideo`），
+> 注册表副本已同步（双侧哈希一致）。
 
 ---
 
@@ -112,22 +116,33 @@ export async function pollTask(taskId, { intervalMs = 2000, timeoutMs = 10 * 60 
 
 ---
 
-## P0 · 必修：同步节点注册表副本
+## ~~P0~~ · 已完成：同步节点注册表副本
 
-### 现象
+> ✅ **2026-10-02 已完成**，当前双侧哈希一致（`377899a3…`）。
+> 以下保留作为**未来再出现不一致时的处理方式**。
 
-`src/data/node-registry.json` 是后端 `docs/node-registry.json` 的副本。后端刚加了**定价段**，副本已过期：
+### 现象（当时）
 
-```
-后端最新  sha256 377899a3781083ce200f696ac070b189494a5b530593885958955cd6a8c17a82
-前端副本  sha256 2dcb8b4f7d0cbb4254590e3ca1f5b0817b2a5008ab9dee3af7beef5e915af50e
-```
-
-### 改法
+`web/src/data/node-registry.json` 是后端 `api/docs/node-registry.json` 的副本。
+后端加了定价段后，副本一度过期：
 
 ```
-copy "F:\Code_X\agent_work\ai-workbench\docs\node-registry.json" ^
-     "F:\KimiData\kimi\Workspaces\AI-work\workflow-platform\src\data\node-registry.json"
+后端最新（当时） sha256 377899a3781083ce200f696ac070b189494a5b530593885958955cd6a8c17a82
+前端副本（当时） sha256 2dcb8b4f7d0cbb4254590e3ca1f5b0817b2a5008ab9dee3af7beef5e915af50e
+```
+
+### 改法（相对路径，换机器也适用）
+
+在项目根目录 `F:\work\ai-workbench\` 下执行：
+
+```
+copy "api\docs\node-registry.json" "web\src\data\node-registry.json"
+```
+
+或直接在项目根目录跑校验（会给出准确的复制命令）：
+
+```
+node api\scripts\checkRegistrySync.cjs web
 ```
 
 ### 安全性
@@ -349,13 +364,17 @@ grep -n "pollTask(" src/lib/runner.js
 
 ### 2) 确认注册表一致
 
+在项目根目录 `F:\work\ai-workbench\` 下执行：
+
 ```bash
-node F:/Code_X/agent_work/ai-workbench/scripts/checkRegistrySync.cjs <你的前端项目路径>
+node api/scripts/checkRegistrySync.cjs web
 ```
 
-输出 `一致` 即通过；输出 `过期` 会给出复制命令。
+输出 `一致` 即通过；输出 `过期` 会给出准确的复制命令。
 
 ### 3) 确认节点类型没被改动
+
+在 `web/` 目录下执行：
 
 ```bash
 node -e "const r=require('./src/data/node-registry.json');console.log(r.summary.nodeTypeCount, Object.keys(r.summary.categories).join(','), r.creditPricing.presets.length)"
@@ -368,7 +387,7 @@ node -e "const r=require('./src/data/node-registry.json');console.log(r.summary.
 后端自带的契约验证脚本会打真实 HTTP 请求，覆盖前端 `api.js` 的每个调用：
 
 ```bash
-cd F:/Code_X/agent_work/ai-workbench
+cd F:/work/ai-workbench/api
 node server/apiContract.test.cjs        # 双向字段校验
 ```
 
