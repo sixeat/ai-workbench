@@ -130,9 +130,11 @@ function createGenerationTaskRequestService({
   taskRepository = defaultTaskRepository,
   videoGenerationService,
 }) {
-  function enqueueImageTask(req) {
+  // requestBody 允许调用方显式传入请求体（服务端工作流编排走这条路）。
+  // 缺省仍然是 req.body，所以现有调用方行为不变。
+  function enqueueImageTask(req, requestBody) {
     const userId = getRequestUserId(req);
-    const body = req.body || {};
+    const body = requestBody || req.body || {};
     const taskBody = {
       ...body,
       publicBaseUrl: getPublicBaseUrl(req),
@@ -172,9 +174,9 @@ function createGenerationTaskRequestService({
     });
   }
 
-  function enqueueVideoTask(req) {
+  function enqueueVideoTask(req, requestBody) {
     const userId = getRequestUserId(req);
-    const body = req.body || {};
+    const body = requestBody || req.body || {};
     const taskBody = {
       ...body,
       publicBaseUrl: getPublicBaseUrl(req),
@@ -220,6 +222,21 @@ function createGenerationTaskRequestService({
       secrets: await readSecrets(),
       taskId: req.params.taskId,
       userId: getRequestUserId(req),
+    });
+  }
+
+  /**
+   * 服务端编排用的视频任务查询入口。
+   *
+   * 与 HTTP 路径共用同一实现，只是属主来自运行节点而不是请求会话。
+   * 没有它，服务端跑的视频任务永远停在 running——上游是异步任务，必须有人轮询。
+   */
+  async function advanceVideoTask({ taskId, userId }) {
+    return videoGenerationService.getVideoTask({
+      query: {},
+      secrets: await readSecrets(),
+      taskId,
+      userId,
     });
   }
 
@@ -303,6 +320,7 @@ function createGenerationTaskRequestService({
   }
 
   return {
+    advanceVideoTask,
     enqueueImageTask,
     enqueueVideoTask,
     getVideoTask,

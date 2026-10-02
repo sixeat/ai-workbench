@@ -20,6 +20,11 @@ const {
   shouldFallbackAfterUpstreamResult,
 } = require('./credentialFallbackService.cjs');
 const { credentialUsageError } = require('./credentialService.cjs');
+const {
+  guardCancelledAfterUpstream,
+  guardCancelledBeforeStart,
+  prepareGenerationTask,
+} = require('./generationTaskSkeleton.cjs');
 const { fetchPublicUrl } = require('./networkGuard.cjs');
 const { getVideoProviderAdapter } = require('./videoProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
@@ -143,26 +148,18 @@ function createVideoGenerationService({
 }) {
   async function runVideoTask({ req, userId, body = {}, secrets, task }) {
     const startedAt = Date.now();
-    const activeTask = task || createVideoTask(userId, {
-      ...body,
-      publicBaseUrl: body.publicBaseUrl || getPublicBaseUrl(req),
-    }, 'running', taskRepository);
-    const taskBody = {
-      ...(activeTask.input || {}),
-      ...body,
-      publicBaseUrl: body.publicBaseUrl || activeTask.input?.publicBaseUrl || getPublicBaseUrl(req),
-    };
-    const workerReq = req || { headers: {}, publicBaseUrl: taskBody.publicBaseUrl };
+    const { activeTask, taskBody, workerReq } = prepareGenerationTask({
+      req,
+      body,
+      task,
+      createTask: (nextBody, status, repository) =>
+        createVideoTask(userId, nextBody, status, repository),
+      taskRepository,
+    });
 
     try {
-      if (taskWasCancelled(activeTask.id, taskRepository)) {
-        taskRepository.addTaskLog(activeTask.id, {
-          level: 'warn',
-          event: 'cancelled_before_start',
-          message: 'Task was cancelled before the video worker started.',
-        });
-        return { status: 409, data: { error: 'Task was cancelled.' } };
-      }
+      const cancelledGuard = guardCancelledBeforeStart({ activeTask, taskRepository });
+      if (cancelledGuard) return cancelledGuard;
 
       const requestedProviderId = taskBody.providerId || 'seedance';
       const adapter = getVideoProviderAdapter(requestedProviderId);
@@ -315,6 +312,10 @@ function createVideoGenerationService({
         const output = {
           providerId,
           credential: {
+            // adapterId 必须存下来：查询阶段没有凭据解析结果可用，
+            // 只靠 providerId 推不出适配器（adapters 里没有 aliyun-bailian 键，
+            // 会兜底到 seedance，于是拿火山方舟的路径去问百炼，永远查不到）。
+            adapterId: credentials.adapterId || '',
             apiKeyId: credentials.apiKeyId || taskBody.apiKeyId || '',
             platformModelId: credentials.platformModelId || taskBody.platformModelId || '',
             platformRouteId: credentials.platformRouteId || '',
@@ -345,20 +346,15 @@ function createVideoGenerationService({
           },
         });
 
-        if (taskWasCancelled(activeTask.id, taskRepository)) {
-          taskRepository.addTaskLog(activeTask.id, {
-            level: 'warn',
-            event: 'cancelled_after_upstream',
-            message: 'Video upstream request finished after cancellation; output was not written.',
-            data: {
-              upstreamTaskId: output.upstream?.taskId || '',
-              upstreamStatus: output.upstream?.status || '',
-              providerId,
-              model: arkBody.model,
-            },
-          });
-          return { status: 409, data: { error: 'Task was cancelled.' } };
-        }
+        const cancelledAfterUpstream = guardCancelledAfterUpstream({
+          activeTask,
+          taskRepository,
+          nodeType: 'Video',
+          output,
+          providerId,
+          model: arkBody.model,
+        });
+        if (cancelledAfterUpstream) return cancelledAfterUpstream;
 
         taskRepository.updateTask(activeTask.id, {
           status: 'running',
@@ -414,15 +410,26 @@ function createVideoGenerationService({
     });
   }
 
-  async function getVideoTask({ taskId, userId, query, secrets }) {
-    const localTask = taskRepository.getTaskForUser(taskId, userId);
+  /**
+   * 查询视频任务并落定。
+   *
+   * 两条调用路径共用同一个入参名：
+   * - HTTP 路由传 req，此时从中取 userId
+   * - 服务端编排传 runNode，用它作为任务属主（此时没有 HTTP 请求可依赖）
+   */
+  async function getVideoTask({ taskId, userId, query = {}, secrets, runNode }) {
+    const resolvedUserId = userId ?? runNode?.userId;
+    const localTask = taskRepository.getTaskForUser(taskId, resolvedUserId);
     const localOutput = localTask?.output || {};
     const upstreamTaskId = localTask?.nodeType === 'video'
       ? localOutput?.upstream?.taskId || query.upstreamTaskId || taskId
       : taskId;
     const providerId = query.providerId || localTask?.providerId || localOutput?.providerId || 'seedance';
-    const adapter = getVideoProviderAdapter(providerId);
     const storedCredential = localOutput?.credential || {};
+    // 必须带上存下来的 adapterId：提交和查询要用同一个适配器，
+    // 只按 providerId 重新推断可能走到另一套协议（真实踩过：拿火山方舟的
+    // /api/v3/... 路径去问百炼，任务永远查不到）。
+    const adapter = getVideoProviderAdapter(providerId, storedCredential.adapterId || '');
     const body = storedCredential.platformModelId ? {
       platformModelId: storedCredential.platformModelId,
       platformRouteId: storedCredential.platformRouteId,
@@ -434,7 +441,7 @@ function createVideoGenerationService({
       providerId,
     };
     const { baseUrl, apiKey } = await resolveApiCredentials({
-      userId,
+      userId: resolvedUserId,
       body,
       secrets: {
         ...secrets,

@@ -20,6 +20,7 @@ const GATEWAY_ROUTE_TABLE = Object.freeze([
   { prefix: '/api/images', service: 'asset-service', module: 'assets', upstreamKey: 'asset', methods: ['GET'] },
   { prefix: '/api/videos', service: 'worker-service', module: 'generation', upstreamKey: 'worker' },
   { prefix: '/api/workflows', service: 'workflow-service', module: 'workflows', upstreamKey: 'workflow' },
+  { prefix: '/api/workflow-runs', service: 'workflow-service', module: 'workflows', upstreamKey: 'workflow' },
   { prefix: '/api/models', service: 'model-service', module: 'models', upstreamKey: 'model' },
   { prefix: '/api/model-catalog', service: 'model-service', module: 'modelCatalog', upstreamKey: 'model' },
   { prefix: '/api/model-capabilities', service: 'model-service', module: 'modelCapabilities', upstreamKey: 'model' },

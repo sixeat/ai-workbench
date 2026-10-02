@@ -29,6 +29,10 @@ const { createPublicAsset, registerAssetRoutes } = require('./routes/assetRoutes
 const { registerModelProxyRoutes } = require('./routes/modelProxyRoutes.cjs');
 const { registerGenerationRoutes } = require('./routes/generationRoutes.cjs');
 const { registerWorkflowRoutes } = require('./routes/workflowRoutes.cjs');
+const { registerWorkflowRunRoutes } = require('./routes/workflowRunRoutes.cjs');
+const { createWorkflowRunService } = require('./services/workflowRunService.cjs');
+const { createWorkflowRunWorker } = require('./workers/workflowRunWorker.cjs');
+const { workflowRunRepository } = require('./repositories/workflowRunRepository.cjs');
 const { registerProviderRoutes } = require('./routes/providerRoutes.cjs');
 const { registerHealthRoutes } = require('./routes/healthRoutes.cjs');
 const { registerCreditRoutes } = require('./routes/creditRoutes.cjs');
@@ -36,6 +40,7 @@ const { registerPlatformModelRoutes } = require('./routes/platformModelRoutes.cj
 const { registerModelCatalogRoutes } = require('./routes/modelCatalogRoutes.cjs');
 const { apiKeyModelRepository } = require('./repositories/apiKeyModelRepository.cjs');
 const { platformModelRepository } = require('./repositories/platformModelRepository.cjs');
+const { workflowRepository } = require('./repositories/workflowRepository.cjs');
 const { createApiKeyTestService } = require('./services/apiKeyTestService.cjs');
 const { createCredentialService } = require('./services/credentialService.cjs');
 const { joinUrl, proxyRequest } = require('./services/proxyService.cjs');
@@ -240,6 +245,56 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     getRequestUserId,
   });
 
+  // 服务端工作流编排。
+  //
+  // 关键点：节点仍然走和 /api/images、/api/videos、/api/chat 完全相同的入队路径，
+  // 所以能力过滤、凭据回退、积分计费、失败退款全部自动继承，不需要重写。
+  const workflowRunService = createWorkflowRunService({ workflowRepository });
+  const workflowRunEnabled = parseBoolean(env.WORKBENCH_SERVER_SIDE_RUNS, false);
+
+  async function submitWorkflowNodeTask({ body, kind, userId }) {
+    // 合成一个请求对象复用现有入队服务：它们只读取 userId 与 publicBaseUrl。
+    const requestLike = { authUser: { id: userId }, body, headers: {} };
+    if (kind === 'image') {
+      const response = generationHandlers.enqueueImageTask(requestLike, body);
+      return { taskId: response?.data?.taskId || '' };
+    }
+    if (kind === 'video') {
+      const response = generationHandlers.enqueueVideoTask(requestLike, body);
+      return { taskId: response?.data?.taskId || '' };
+    }
+    if (kind === 'text') {
+      const prompt = String(body.prompt || body.content || '').trim();
+      const textBody = {
+        ...body,
+        messages: Array.isArray(body.messages) && body.messages.length > 0
+          ? body.messages
+          : [{ content: prompt, role: 'user' }],
+        requestKind: 'chat',
+      };
+      const response = modelProxyHandlers.enqueueTextTask({ ...requestLike, body: textBody }, 'chat');
+      return { taskId: response?.data?.taskId || '' };
+    }
+    throw Object.assign(new Error(`Unsupported workflow node task kind: ${kind}`), { status: 400 });
+  }
+
+  const workflowRunWorker = createWorkflowRunWorker({
+    autoStart: shouldStartWorkers,
+    enabled: workflowRunEnabled,
+    // 视频是上游异步任务，必须由后台轮询才能落定；缺了它节点会永远停在 queued
+    advanceVideoTask: ({ taskId, userId }) => generationHandlers.advanceVideoTask({ taskId, userId }),
+    enqueueTask: ({ body, kind, userId }) => submitWorkflowNodeTask({ body, kind, userId }),
+    pollIntervalMs: Number(env.WORKBENCH_WORKFLOW_RUN_POLL_INTERVAL_MS || 2000),
+    taskRepository,
+    workflowRunRepository,
+    workflowRunService,
+  });
+
+  registerWorkflowRunRoutes(app, {
+    getRequestUserId,
+    workflowRunService,
+  });
+
   registerProviderRoutes(app);
 
   registerAssetRoutes(app, {
@@ -291,6 +346,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
     await Promise.all([
       modelProxyHandlers.stopTextQueue(),
       generationHandlers.stopGenerationQueue(),
+      workflowRunWorker.stopWorkflowRunWorker(),
     ]);
   }
 

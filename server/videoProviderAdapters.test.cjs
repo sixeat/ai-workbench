@@ -17,6 +17,50 @@ const req = {
   protocol: 'https',
 };
 
+// 适配器解析：提交与查询必须解析到同一个适配器。
+//
+// 真实踩过的坑：提交时用 credentials.adapterId 解析（正确），
+// 查询时只传了 providerId，漏了 adapterId。两侧靠不同的输入各推一次，
+// 一旦凭据结构变化就会推出不同的适配器——协议不匹配，任务永远查不到。
+// 修复是把 adapterId 存进凭据产物，查询时显式复用。
+test('getVideoProviderAdapter 带 adapterId 时精确解析到对应适配器', () => {
+  assert.equal(getVideoProviderAdapter('aliyun-bailian', 'dashscope-video').id, 'aliyun-bailian');
+  assert.equal(getVideoProviderAdapter('seedance', 'seedance-video').id, 'seedance');
+  assert.equal(getVideoProviderAdapter('xai', 'xai-video').id, 'xai');
+
+  // adapterId 优先于 providerId：即使 providerId 认不出来，也能靠 adapterId 定位
+  assert.equal(
+    getVideoProviderAdapter('unknown-provider', 'dashscope-video').id,
+    'aliyun-bailian',
+    'adapterId 应当能独立定位适配器'
+  );
+});
+
+test('百炼与火山的查询路径不同，混用会查不到任务', () => {
+  const bailianQuery = getVideoProviderAdapter('aliyun-bailian', 'dashscope-video')
+    .buildQueryRequest({ taskId: 't1', apiKey: 'k' });
+  const arkQuery = getVideoProviderAdapter('seedance', 'seedance-video')
+    .buildQueryRequest({ taskId: 't1', apiKey: 'k' });
+
+  assert.equal(bailianQuery.endpoint, '/api/v1/tasks/t1');
+  assert.equal(arkQuery.endpoint, '/api/v3/contents/generations/tasks/t1');
+});
+
+test('summarizeVideoUpstream 取任务号而不是请求编号', () => {
+  // 百炼真实响应：request_id 与 output.task_id 同时存在
+  const bailian = summarizeVideoUpstream({
+    request_id: 'req-not-a-task',
+    output: { task_id: 'real-task-id', task_status: 'PENDING' },
+  });
+  assert.equal(bailian.taskId, 'real-task-id', '不能把 request_id 当成任务号');
+  assert.equal(bailian.status, 'PENDING');
+
+  // 火山方舟形状
+  assert.equal(summarizeVideoUpstream({ id: 'ark-1', status: 'queued' }).taskId, 'ark-1');
+  // 只有在没有任务号时才退到 request_id
+  assert.equal(summarizeVideoUpstream({ request_id: 'only-req' }).taskId, 'only-req');
+});
+
 test('seedance adapter normalizes text, image, video and audio content', () => {
   const content = normalizeArkContent({
     prompt: 'make tea ad',

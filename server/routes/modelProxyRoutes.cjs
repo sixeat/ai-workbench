@@ -159,6 +159,7 @@ function registerModelProxyRoutes(app, context) {
   });
 
   return {
+    enqueueTextTask: textTaskRequestService.enqueueTextTask,
     getTextQueueStats: textWorker.getTextQueueStats,
     retryTextTask: textTaskRequestService.retryTextTask,
     stopTextQueue: textWorker.stopTextQueue,

@@ -127,7 +127,18 @@ function buildBailianContentForValidation(body) {
 }
 
 function summarizeVideoUpstream(data) {
-  const taskId = data?.request_id || data?.requestId || data?.id || data?.task_id || data?.taskId || data?.output?.task_id || data?.output?.id || data?.data?.id;
+  // 顺序很重要：request_id 是「这一次 HTTP 请求」的编号，不是「任务」编号，
+  // 拿它去查任务只会得到 UNKNOWN。所以真正的任务 id 必须排在它前面。
+  const taskId = data?.output?.task_id
+    || data?.output?.id
+    || data?.output?.taskId
+    || data?.task_id
+    || data?.taskId
+    || data?.data?.task_id
+    || data?.data?.id
+    || data?.id
+    || data?.request_id
+    || data?.requestId;
   const status = data?.status || data?.task_status || data?.output?.task_status || data?.output?.status || data?.data?.status;
   return {
     ...(taskId ? { taskId: String(taskId) } : {}),

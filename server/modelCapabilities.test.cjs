@@ -149,6 +149,47 @@ test('resolved model capabilities include matched rules for admin previews', () 
   assert.ok(resolved.matchedRules.some((rule) => rule.modelPattern === 'gpt-image-2*'));
 });
 
+test('规则合并顺序：具体规则必须覆盖通用规则', () => {
+  // 真实踩过的坑：模型同时命中 * 与专用规则时，合并顺序决定最终能力。
+  // 若按「通配符个数」排序，* 和 wan2.7-image* 都只有 1 个通配符、无法区分，
+  // 具体规则会被排到 * 前面，最终能力反被 * 冲掉 ——
+  // wan2.6-image / wan2.7-image-pro 就是这样被标成「既不能生图也不能对话」的。
+  const cases = [
+    { expect: { chat: false, imageGeneration: true, videoGeneration: false }, model: 'wan2.7-image' },
+    { expect: { chat: false, imageGeneration: true, videoGeneration: false }, model: 'wan2.7-image-pro' },
+    { expect: { chat: false, imageGeneration: true, videoGeneration: false }, model: 'wan2.6-image' },
+    { expect: { chat: false, imageGeneration: false, videoGeneration: true }, model: 'wan2.7-t2v' },
+    { expect: { chat: true, imageGeneration: false, videoGeneration: false }, model: 'qwen-plus' },
+  ];
+
+  for (const { expect, model } of cases) {
+    const { capabilities, matchedRules } = resolveModelCapabilitiesDetailed('aliyun-bailian', model);
+    const hit = matchedRules.map((rule) => rule.modelPattern).join(' → ');
+    assert.equal(capabilities.chat, expect.chat, `${model} chat 归类错误（命中 ${hit}）`);
+    assert.equal(capabilities.imageGeneration, expect.imageGeneration, `${model} 图片能力错误（命中 ${hit}）`);
+    assert.equal(capabilities.videoGeneration, expect.videoGeneration, `${model} 视频能力错误（命中 ${hit}）`);
+  }
+});
+
+test('命中的规则按「通用在前、具体在后」排序', () => {
+  const { matchedRules } = resolveModelCapabilitiesDetailed('aliyun-bailian', 'wan2.7-image-pro');
+  const patterns = matchedRules.map((rule) => rule.modelPattern);
+
+  const wildcardIndex = patterns.indexOf('*');
+  const literalIndex = patterns.indexOf('wan2.7-image-pro');
+  assert.ok(wildcardIndex >= 0 && literalIndex >= 0, `两条规则都应命中，实际: ${patterns.join(',')}`);
+  assert.ok(wildcardIndex < literalIndex, `* 应排在字面量规则之前，实际顺序: ${patterns.join(' → ')}`);
+});
+
+test('图片 Pro 模型保留 4K 尺寸能力且不被误判为对话模型', () => {
+  const { capabilities } = resolveModelCapabilitiesDetailed('aliyun-bailian', 'wan2.7-image-pro');
+
+  assert.equal(capabilities.imageGeneration, true);
+  assert.equal(capabilities.chat, false);
+  assert.deepEqual(capabilities.image.sizeAliases, ['1K', '2K', '4K']);
+  assert.equal(capabilities.image.maxPixels, 4096 * 4096);
+});
+
 test('xai grok imagine video capabilities validate duration and ratios', () => {
   const capabilities = getModelCapabilities('xai', 'grok-imagine-video-1.5');
 

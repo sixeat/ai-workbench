@@ -328,6 +328,63 @@ function migrate() {
     CREATE INDEX IF NOT EXISTS idx_platform_model_routes_model ON platform_model_routes(platform_model_id, is_enabled, priority);
     CREATE INDEX IF NOT EXISTS idx_api_key_models_key ON api_key_models(api_key_id, is_enabled, discovery_status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_api_key_models_provider ON api_key_models(model_provider_id, upstream_model);
+
+    -- 工作流级运行：一条记录代表"把某张图完整跑一遍"。
+    -- definition_json 存运行那一刻的节点/连线快照，模板之后被改动也不影响历史复盘。
+    CREATE TABLE IF NOT EXISTS workflow_runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT NOT NULL,
+      workflow_version_id TEXT,
+      user_id TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
+      trigger TEXT NOT NULL DEFAULT 'manual' CHECK (trigger IN ('manual', 'api', 'schedule')),
+      idempotency_key TEXT,
+      graph_hash TEXT,
+      definition_json TEXT NOT NULL,
+      output_json TEXT,
+      error_json TEXT,
+      credit_cost INTEGER NOT NULL DEFAULT 0,
+      credit_status TEXT NOT NULL DEFAULT 'none' CHECK (credit_status IN ('none', 'reserved', 'charged', 'refunded')),
+      reserved_credits INTEGER NOT NULL DEFAULT 0,
+      total_nodes INTEGER NOT NULL DEFAULT 0,
+      finished_nodes INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      -- 注意：这里刻意不加 workflow_id 外键。工作流可以删除和回滚版本，
+      -- 但历史运行必须能独立存活——否则删模板会连带毁掉运行记录或直接删不掉。
+      FOREIGN KEY (user_id) REFERENCES users(id)
+    );
+
+    -- 运行里的单个节点。task_id 指向 tasks 表里真正执行的那条任务，
+    -- 复用现有生成队列与失败重试，编排层不自己调厂商接口。
+    CREATE TABLE IF NOT EXISTS workflow_run_nodes (
+      id TEXT PRIMARY KEY,
+      run_id TEXT NOT NULL,
+      node_id TEXT NOT NULL,
+      node_type TEXT NOT NULL,
+      status TEXT NOT NULL CHECK (status IN ('pending', 'blocked', 'queued', 'running', 'succeeded', 'failed', 'skipped', 'cancelled')),
+      task_id TEXT,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      input_hash TEXT,
+      output_json TEXT,
+      error_json TEXT,
+      duration_ms INTEGER,
+      started_at TEXT,
+      finished_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      UNIQUE (run_id, node_id),
+      FOREIGN KEY (run_id) REFERENCES workflow_runs(id) ON DELETE CASCADE,
+      FOREIGN KEY (task_id) REFERENCES tasks(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_workflow_runs_idempotency
+      ON workflow_runs(user_id, idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_created ON workflow_runs(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON workflow_runs(status, updated_at);
+    CREATE INDEX IF NOT EXISTS idx_workflow_runs_workflow ON workflow_runs(workflow_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_run_status ON workflow_run_nodes(run_id, status);
+    CREATE INDEX IF NOT EXISTS idx_workflow_run_nodes_task ON workflow_run_nodes(task_id);
   `);
 
   ensureColumn('users', 'username', 'TEXT');
@@ -2788,6 +2845,306 @@ function countModelCapabilities(options = {}) {
   return Number(row?.count || 0);
 }
 
+function rowToWorkflowRun(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    workflowId: row.workflow_id,
+    workflowVersionId: row.workflow_version_id || null,
+    userId: row.user_id,
+    status: row.status,
+    trigger: row.trigger,
+    idempotencyKey: row.idempotency_key || null,
+    graphHash: row.graph_hash || '',
+    definition: jsonParse(row.definition_json, { nodes: [], edges: [] }),
+    output: jsonParse(row.output_json, null),
+    error: jsonParse(row.error_json, null),
+    creditCost: Number(row.credit_cost || 0),
+    creditStatus: row.credit_status || 'none',
+    reservedCredits: Number(row.reserved_credits || 0),
+    totalNodes: Number(row.total_nodes || 0),
+    finishedNodes: Number(row.finished_nodes || 0),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function rowToWorkflowRunNode(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    runId: row.run_id,
+    nodeId: row.node_id,
+    nodeType: row.node_type,
+    status: row.status,
+    taskId: row.task_id || null,
+    attempt: Number(row.attempt || 0),
+    inputHash: row.input_hash || '',
+    output: jsonParse(row.output_json, null),
+    error: jsonParse(row.error_json, null),
+    durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
+    startedAt: row.started_at || null,
+    finishedAt: row.finished_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function createWorkflowRun(run) {
+  const now = new Date().toISOString();
+  const id = run.id || require('crypto').randomUUID();
+  db.prepare(`
+    INSERT INTO workflow_runs (
+      id, workflow_id, workflow_version_id, user_id, status, trigger, idempotency_key,
+      graph_hash, definition_json, output_json, error_json, credit_cost, credit_status,
+      reserved_credits, total_nodes, finished_nodes, created_at, updated_at
+    )
+    VALUES (
+      @id, @workflowId, @workflowVersionId, @userId, @status, @trigger, @idempotencyKey,
+      @graphHash, @definitionJson, @outputJson, @errorJson, @creditCost, @creditStatus,
+      @reservedCredits, @totalNodes, @finishedNodes, @createdAt, @updatedAt
+    )
+  `).run({
+    id,
+    workflowId: run.workflowId,
+    workflowVersionId: run.workflowVersionId || null,
+    userId: run.userId || DEFAULT_USER_ID,
+    status: run.status || 'queued',
+    trigger: run.trigger || 'manual',
+    idempotencyKey: run.idempotencyKey || null,
+    graphHash: run.graphHash || null,
+    definitionJson: jsonStringify(run.definition || { nodes: [], edges: [] }),
+    outputJson: run.output == null ? null : jsonStringify(run.output),
+    errorJson: run.error == null ? null : jsonStringify(run.error),
+    creditCost: Number(run.creditCost || 0),
+    creditStatus: run.creditStatus || 'none',
+    reservedCredits: Number(run.reservedCredits || 0),
+    totalNodes: Number(run.totalNodes || 0),
+    finishedNodes: Number(run.finishedNodes || 0),
+    createdAt: run.createdAt || now,
+    updatedAt: run.updatedAt || now,
+  });
+  return getWorkflowRun(id);
+}
+
+function getWorkflowRun(id) {
+  return rowToWorkflowRun(db.prepare('SELECT * FROM workflow_runs WHERE id = ?').get(id));
+}
+
+function getWorkflowRunForUser(id, userId = DEFAULT_USER_ID) {
+  return rowToWorkflowRun(
+    db.prepare('SELECT * FROM workflow_runs WHERE id = ? AND user_id = ?').get(id, userId)
+  );
+}
+
+function getWorkflowRunByIdempotencyKey(userId, idempotencyKey) {
+  if (!idempotencyKey) return null;
+  return rowToWorkflowRun(
+    db.prepare('SELECT * FROM workflow_runs WHERE user_id = ? AND idempotency_key = ?').get(userId, idempotencyKey)
+  );
+}
+
+function listWorkflowRuns(userId = DEFAULT_USER_ID, options = {}) {
+  const conditions = ['user_id = ?'];
+  const params = [userId];
+  if (options.workflowId) {
+    conditions.push('workflow_id = ?');
+    params.push(options.workflowId);
+  }
+  if (options.status) {
+    conditions.push('status = ?');
+    params.push(options.status);
+  }
+  const limit = Math.max(1, Math.min(200, Number(options.limit || 50) || 50));
+  const offset = Math.max(0, Number(options.offset || 0) || 0);
+  return db.prepare(`
+    SELECT * FROM workflow_runs
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(...params, limit, offset).map(rowToWorkflowRun);
+}
+
+function countWorkflowRuns(userId = DEFAULT_USER_ID, options = {}) {
+  const conditions = ['user_id = ?'];
+  const params = [userId];
+  if (options.workflowId) {
+    conditions.push('workflow_id = ?');
+    params.push(options.workflowId);
+  }
+  if (options.status) {
+    conditions.push('status = ?');
+    params.push(options.status);
+  }
+  const row = db.prepare(`SELECT COUNT(*) AS count FROM workflow_runs WHERE ${conditions.join(' AND ')}`)
+    .get(...params);
+  return Number(row?.count || 0);
+}
+
+// 推进器每轮都在找"还没跑完的运行"。终态之外的状态都要捞出来，
+// 否则进程重启后未完成的运行会永久停在那里。
+function listActiveWorkflowRuns(options = {}) {
+  const excludeStatuses = Array.isArray(options.excludeStatuses) && options.excludeStatuses.length > 0
+    ? options.excludeStatuses
+    : ['succeeded', 'failed', 'cancelled'];
+  const limit = Math.max(1, Math.min(500, Number(options.limit || 100) || 100));
+  return db.prepare(`
+    SELECT * FROM workflow_runs
+    WHERE status NOT IN (${excludeStatuses.map(() => '?').join(', ')})
+    ORDER BY created_at ASC
+    LIMIT ?
+  `).all(...excludeStatuses, limit).map(rowToWorkflowRun);
+}
+
+function updateWorkflowRun(id, patch = {}) {
+  const existing = getWorkflowRun(id);
+  if (!existing) return null;
+  const merged = { ...existing, ...patch };
+  db.prepare(`
+    UPDATE workflow_runs
+    SET status = @status,
+        graph_hash = @graphHash,
+        definition_json = @definitionJson,
+        output_json = @outputJson,
+        error_json = @errorJson,
+        credit_cost = @creditCost,
+        credit_status = @creditStatus,
+        reserved_credits = @reservedCredits,
+        total_nodes = @totalNodes,
+        finished_nodes = @finishedNodes,
+        updated_at = @updatedAt
+    WHERE id = @id
+  `).run({
+    id,
+    status: merged.status,
+    graphHash: merged.graphHash || null,
+    definitionJson: jsonStringify(merged.definition || { nodes: [], edges: [] }),
+    outputJson: merged.output == null ? null : jsonStringify(merged.output),
+    errorJson: merged.error == null ? null : jsonStringify(merged.error),
+    creditCost: Number(merged.creditCost || 0),
+    creditStatus: merged.creditStatus || 'none',
+    reservedCredits: Number(merged.reservedCredits || 0),
+    totalNodes: Number(merged.totalNodes || 0),
+    finishedNodes: Number(merged.finishedNodes || 0),
+    updatedAt: new Date().toISOString(),
+  });
+  return getWorkflowRun(id);
+}
+
+function createWorkflowRunNode(node) {
+  const now = new Date().toISOString();
+  const id = node.id || require('crypto').randomUUID();
+  db.prepare(`
+    INSERT INTO workflow_run_nodes (
+      id, run_id, node_id, node_type, status, task_id, attempt, input_hash,
+      output_json, error_json, duration_ms, started_at, finished_at, created_at, updated_at
+    )
+    VALUES (
+      @id, @runId, @nodeId, @nodeType, @status, @taskId, @attempt, @inputHash,
+      @outputJson, @errorJson, @durationMs, @startedAt, @finishedAt, @createdAt, @updatedAt
+    )
+    ON CONFLICT(run_id, node_id) DO UPDATE SET
+      node_type = excluded.node_type,
+      status = excluded.status,
+      task_id = excluded.task_id,
+      attempt = excluded.attempt,
+      input_hash = excluded.input_hash,
+      output_json = excluded.output_json,
+      error_json = excluded.error_json,
+      duration_ms = excluded.duration_ms,
+      started_at = excluded.started_at,
+      finished_at = excluded.finished_at,
+      updated_at = excluded.updated_at
+  `).run({
+    id,
+    runId: node.runId,
+    nodeId: node.nodeId,
+    nodeType: node.nodeType,
+    status: node.status || 'pending',
+    taskId: node.taskId || null,
+    attempt: Number(node.attempt || 0),
+    inputHash: node.inputHash || null,
+    outputJson: node.output == null ? null : jsonStringify(node.output),
+    errorJson: node.error == null ? null : jsonStringify(node.error),
+    durationMs: node.durationMs == null ? null : Number(node.durationMs),
+    startedAt: node.startedAt || null,
+    finishedAt: node.finishedAt || null,
+    createdAt: node.createdAt || now,
+    updatedAt: node.updatedAt || now,
+  });
+  return getWorkflowRunNode(node.runId, node.nodeId);
+}
+
+// 把节点关联到真实任务。任务表有外键，所以先确认任务存在再写，
+// 避免"入队是异步的、任务行还没落库"时抛 FOREIGN KEY constraint failed，
+// 那种错误会被上层误判成入队失败而把节点标成 failed。
+function linkWorkflowRunNodeTask(runId, nodeId, taskId) {
+  if (!taskId) return null;
+  const taskExists = db.prepare('SELECT 1 FROM tasks WHERE id = ?').get(taskId);
+  if (!taskExists) return null;
+  return updateWorkflowRunNode(runId, nodeId, { taskId });
+}
+
+// 按运行 + 节点定位已创建的任务。用于判断"这个节点是不是已经提交过了"，
+// 避免重试路径产生重复任务。
+function getTaskByWorkflowRunNode(runId, nodeId) {
+  if (!runId || !nodeId) return null;
+  const row = db.prepare(`
+    SELECT t.* FROM tasks t
+    JOIN workflow_run_nodes n ON n.task_id = t.id
+    WHERE n.run_id = ? AND n.node_id = ?
+  `).get(runId, nodeId);
+  return rowToTask(row);
+}
+
+function getWorkflowRunNode(runId, nodeId) {
+  return rowToWorkflowRunNode(
+    db.prepare('SELECT * FROM workflow_run_nodes WHERE run_id = ? AND node_id = ?').get(runId, nodeId)
+  );
+}
+
+function listWorkflowRunNodes(runId) {
+  return db.prepare(`
+    SELECT * FROM workflow_run_nodes
+    WHERE run_id = ?
+    ORDER BY created_at ASC
+  `).all(runId).map(rowToWorkflowRunNode);
+}
+
+function updateWorkflowRunNode(runId, nodeId, patch = {}) {
+  const existing = getWorkflowRunNode(runId, nodeId);
+  if (!existing) return null;
+  const merged = { ...existing, ...patch };
+  db.prepare(`
+    UPDATE workflow_run_nodes
+    SET status = @status,
+        task_id = @taskId,
+        attempt = @attempt,
+        input_hash = @inputHash,
+        output_json = @outputJson,
+        error_json = @errorJson,
+        duration_ms = @durationMs,
+        started_at = @startedAt,
+        finished_at = @finishedAt,
+        updated_at = @updatedAt
+    WHERE run_id = @runId AND node_id = @nodeId
+  `).run({
+    runId,
+    nodeId,
+    status: merged.status,
+    taskId: merged.taskId || null,
+    attempt: Number(merged.attempt || 0),
+    inputHash: merged.inputHash || null,
+    outputJson: merged.output == null ? null : jsonStringify(merged.output),
+    errorJson: merged.error == null ? null : jsonStringify(merged.error),
+    durationMs: merged.durationMs == null ? null : Number(merged.durationMs),
+    startedAt: merged.startedAt || null,
+    finishedAt: merged.finishedAt || null,
+    updatedAt: new Date().toISOString(),
+  });
+  return getWorkflowRunNode(runId, nodeId);
+}
+
 migrate();
 ensureDefaultUser();
 ensureCreditAccountsForExistingUsers();
@@ -2800,8 +3157,17 @@ module.exports = {
   db,
   createSession,
   createTask,
-  createEmailVerification,
-  createUser,
+  createWorkflowRun,
+  createWorkflowRunNode,
+  getWorkflowRun,
+  getWorkflowRunByIdempotencyKey,
+  getTaskByWorkflowRunNode,
+  getWorkflowRunForUser,
+  getWorkflowRunNode,
+  listActiveWorkflowRuns,
+  linkWorkflowRunNodeTask,
+  listWorkflowRuns,
+  createEmailVerification,  createUser,
   consumeEmailVerification,
   consumeInvitationCode,
   createAuditLog,
@@ -2814,6 +3180,7 @@ module.exports = {
   countPlatformModels,
   countWorkflowVersions,
   countWorkflows,
+  countWorkflowRuns,
   countUsers,
   deleteExpiredSessions,
   deleteSessionByTokenHash,
@@ -2840,6 +3207,8 @@ module.exports = {
   updateUserStatus,
   updateTask,
   upsertWorkflow,
+  updateWorkflowRun,
+  updateWorkflowRunNode,
   createWorkflowVersion,
   deleteWorkflow,
   deletePlatformModel,
@@ -2857,6 +3226,7 @@ module.exports = {
   countQueuedTasks,
   listTaskLogs,
   listWorkflows,
+  listWorkflowRunNodes,
   listTaskAssets,
   markRunningTasksInterrupted,
   countTasks,

@@ -31,3 +31,5 @@ server/secrets.json
 *.njsproj
 *.sln
 *.sw?
+.env.test-key
+*.test-key

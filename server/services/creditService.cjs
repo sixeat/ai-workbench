@@ -4,8 +4,8 @@ const { authRepository: defaultAuthRepository } = require('../repositories/authR
 const { creditRepository: defaultCreditRepository } = require('../repositories/creditRepository.cjs');
 const { platformModelRepository: defaultPlatformModelRepository } = require('../repositories/platformModelRepository.cjs');
 const { taskRepository: defaultTaskRepository } = require('../repositories/taskRepository.cjs');
-const { filterImageBodyByCapabilities, filterVideoBodyByCapabilities } = require('../modelCapabilities.cjs');
-const { createCreditPricingService } = require('./creditPricingService.cjs');
+const { filterImageBodyByCapabilities, filterVideoBodyByCapabilities, getModelCapabilities } = require('../modelCapabilities.cjs');
+const { createCreditPricingService, sanitizeCreditCost } = require('./creditPricingService.cjs');
 const { createPlatformModelService } = require('./platformModelService.cjs');
 
 function publicKeyScope(scope) {
@@ -149,13 +149,73 @@ function createCreditService({
     }
   }
 
+  /**
+   * 选中模型声明的单价。
+   *
+   * 平台模型的能力表里可以放 creditCost 作为运营覆盖价（不需要改库结构），
+   * 否则回退到模型能力 preset 里的分档单价。
+   */
+  /** 已存的 apiKeyModel 记录（能力表里带着 preset 算出的 creditCost）。 */
+  function apiKeyModelCost({ apiKeyModelId, userId }) {
+    if (!apiKeyModelId) return null;
+    const model = apiKeyModelRepository.getApiKeyModelForUser(apiKeyModelId, userId, false);
+    return model?.capabilities?.creditCost || null;
+  }
+
+  /**
+   * 按 model + provider 回算 preset 单价。
+   *
+   * 这一层是为「只传了 model 名、没有 model 记录」的调用准备的。
+   * 注意必须同时给 providerId：同一个模型名在不同 provider 下的能力 preset 不同，
+   * 只按名字查会取到别的供应商的价格。
+   */
+  function presetCreditCost({ body = {} }) {
+    const model = String(body.model || '').trim();
+    const providerId = String(body.providerId || '').trim();
+    if (!model || !providerId) return null;
+    return getModelCapabilities(providerId, model)?.creditCost || null;
+  }
+
+  /**
+   * 选中模型声明的单价，按优先级从高到低查找：
+   *
+   *   1. 平台模型自身能力表里的 creditCost（运营覆盖价，改这里不用发版）
+   *   2. 平台模型路由所指 apiKeyModel 的 creditCost（模型发现时由 preset 算出）
+   *   3. 直接选 apiKeyModel 时的 creditCost
+   *   4. 按 model + provider 回算 preset
+   *
+   * 任一层返回"没有可用字段"时继续往下找，所以运营只需要覆盖关心的那一项。
+   */
+  function modelCreditCost({ body = {}, userId }) {
+    if (body.platformModelId) {
+      const platformModel = platformModelService.getPublicPlatformModel(body.platformModelId);
+      const ownCost = platformModel?.capabilities?.creditCost;
+      if (Object.keys(sanitizeCreditCost(ownCost)).length > 0) return ownCost;
+
+      const [firstRoute] = platformModelRepository.listPlatformModelRoutes(body.platformModelId);
+      const routeCost = firstRoute?.apiKeyModel?.capabilities?.creditCost;
+      if (Object.keys(sanitizeCreditCost(routeCost)).length > 0) return routeCost;
+    }
+
+    const stored = apiKeyModelCost({ apiKeyModelId: body.apiKeyModelId, userId });
+    if (Object.keys(sanitizeCreditCost(stored)).length > 0) return stored;
+
+    const preset = presetCreditCost({ body });
+    return preset;
+  }
+
   function createBillableTask({ body = {}, createTask, nodeType, requestMeta = {}, userId }) {
     if (typeof createTask !== 'function') {
       throw new Error('createTask callback is required.');
     }
     assertTaskModelCapabilities({ body, nodeType, userId });
     const keyScope = resolveTaskKeyScope({ body, userId });
-    const estimate = creditPricingService.estimate({ body, keyScope, nodeType });
+    const estimate = creditPricingService.estimate({
+      body,
+      keyScope,
+      modelCreditCost: modelCreditCost({ body, userId }),
+      nodeType,
+    });
     const billing = billingInput(estimate);
     const taskBody = {
       ...body,

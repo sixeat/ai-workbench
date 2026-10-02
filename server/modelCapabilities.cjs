@@ -230,6 +230,9 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wan2.7-image*',
     capabilities: {
+      // 按模型分档定价。标定基准：图片 10 积分 ≈ ¥0.4 上游成本，即 1 积分 ≈ ¥0.04。
+      // 视频与图片成本差约 40 倍，必须分档，否则低档亏、高档赶客。
+      creditCost: { imagePerItem: 10 },
       chat: false,
       imageGeneration: true,
       imageReference: true,
@@ -255,10 +258,19 @@ const DEFAULT_CAPABILITY_RULES = [
   },
   {
     label: '万相 2.7 图片 Pro',
-    description: '适用于 wan2.7-image-pro，扩展到 4K 输出限制。',
+    description: '适用于 wan2.7-image-pro，在 wan2.7-image* 基础上扩展到 4K 输出限制。',
     providerId: 'aliyun-bailian',
     modelPattern: 'wan2.7-image-pro',
     capabilities: {
+      // 显式声明操作能力，让这条规则自我完备。
+      // 只写 image 子项的话，chat/imageGeneration 会继承自上一条规则，
+      // 结果受合并顺序影响——一旦顺序变化，模型就会变成"既不能生图也不能对话"。
+      creditCost: { imagePerItem: 30 },
+      chat: false,
+      imageGeneration: true,
+      imageReference: true,
+      multiImageReference: true,
+      seed: true,
       image: {
         sizeAliases: ['1K', '2K', '4K'],
         maxPixels: 4096 * 4096,
@@ -271,6 +283,7 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wan2.6-image',
     capabilities: {
+      creditCost: { imagePerItem: 10 },
       chat: false,
       imageGeneration: true,
       imageReference: true,
@@ -299,6 +312,7 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wan*-t2v*',
     capabilities: {
+      creditCost: { videoPerSecond: 75 },
       chat: false,
       imageGeneration: false,
       imageReference: false,
@@ -329,6 +343,7 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wan2.7-t2v*',
     capabilities: {
+      creditCost: { videoPerSecond: 75 },
       chat: false,
       imageGeneration: false,
       imageReference: false,
@@ -371,6 +386,7 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wan*-i2v*',
     capabilities: {
+      creditCost: { videoPerSecond: 75 },
       chat: false,
       imageGeneration: false,
       imageReference: true,
@@ -403,6 +419,7 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wan2.7-*-i2v*',
     capabilities: {
+      creditCost: { videoPerSecond: 75 },
       chat: false,
       imageGeneration: false,
       imageReference: true,
@@ -453,6 +470,7 @@ const DEFAULT_CAPABILITY_RULES = [
     providerId: 'aliyun-bailian',
     modelPattern: 'wanx2.1-t2i-*',
     capabilities: {
+      creditCost: { imagePerItem: 10 },
       chat: false,
       imageGeneration: true,
       imageReference: false,
@@ -512,20 +530,55 @@ function wildcardToRegExp(pattern) {
   return new RegExp(`^${escaped.replace(/\*/g, '.*')}$`, 'i');
 }
 
+/**
+ * 规则的"具体程度"排序键。
+ *
+ * 一个模型可能同时命中多条规则（例如 wan2.7-image 既命中 * 又命中 wan2.7-image*）。
+ * 合并是后者覆盖前者，所以**必须让越具体的规则越晚合并**。
+ *
+ * 具体度用「字面字符数」衡量，不能用「通配符个数」——
+ * `*` 和 `wan2.7-image*` 都只有 1 个通配符，按个数无法区分，
+ * 会导致 `*` 被排到最后、反过来冲掉专用规则。
+ *
+ * 真实踩过的坑：wan2.6-image / wan2.7-image-pro 被判成对话模型（imageGeneration=false），
+ * 既不能生图也不能对话，就是因为字面量规则被排到了 `*` 前面。
+ */
+function capabilityRuleSpecificity(rule) {
+  const pattern = String(rule?.modelPattern || '');
+  const wildcards = (pattern.match(/\*/g) || []).length;
+  return {
+    literals: pattern.length - wildcards,
+    pattern,
+    wildcards,
+  };
+}
+
+/** 排序：字面字符少的（更通用）在前，多的（更具体）在后，由后者覆盖前者。 */
+function compareCapabilityRules(left, right) {
+  const a = capabilityRuleSpecificity(left);
+  const b = capabilityRuleSpecificity(right);
+  if (a.literals !== b.literals) return a.literals - b.literals;
+  if (a.wildcards !== b.wildcards) return a.wildcards - b.wildcards;
+  return a.pattern < b.pattern ? -1 : a.pattern > b.pattern ? 1 : 0;
+}
+
 function resolveModelCapabilitiesDetailed(providerId = 'openai-compatible', model = '', repository = defaultModelCapabilityRepository) {
   const rules = repository.listModelCapabilities().filter((rule) => rule.providerId === providerId);
   let resolved = { ...BASE_CAPABILITIES };
   const matchedRules = [];
 
-  for (const rule of rules) {
-    if (rule.modelPattern === '*' || wildcardToRegExp(rule.modelPattern).test(model)) {
-      resolved = mergeCapabilities(resolved, rule.capabilities);
-      matchedRules.push({
-        id: rule.id || `${rule.providerId}:${rule.modelPattern}`,
-        providerId: rule.providerId,
-        modelPattern: rule.modelPattern,
-      });
-    }
+  // 先按具体程度排序，再依次合并：通用规则先铺底，专用规则后覆盖。
+  const matched = rules
+    .filter((rule) => rule.modelPattern === '*' || wildcardToRegExp(rule.modelPattern).test(model))
+    .sort(compareCapabilityRules);
+
+  for (const rule of matched) {
+    resolved = mergeCapabilities(resolved, rule.capabilities);
+    matchedRules.push({
+      id: rule.id || `${rule.providerId}:${rule.modelPattern}`,
+      providerId: rule.providerId,
+      modelPattern: rule.modelPattern,
+    });
   }
 
   return {
@@ -933,11 +986,24 @@ function filterVideoBodyByCapabilities(body, capabilities) {
 
 seedDefaultCapabilities();
 
+/** 只导出声明了 creditCost 的预设，供节点注册表导出「模型定价档位」。 */
+function listCreditPricedPresets() {
+  return DEFAULT_CAPABILITY_RULES
+    .filter((rule) => rule.capabilities?.creditCost)
+    .map((rule) => ({
+      creditCost: rule.capabilities.creditCost,
+      label: rule.label || rule.modelPattern,
+      modelPattern: rule.modelPattern,
+      providerId: rule.providerId,
+    }));
+}
+
 module.exports = {
   BASE_CAPABILITIES,
   resolveModelCapabilitiesDetailed,
   getModelCapabilities,
   filterImageBodyByCapabilities,
   filterVideoBodyByCapabilities,
+  listCreditPricedPresets,
   listModelCapabilityPresets,
 };

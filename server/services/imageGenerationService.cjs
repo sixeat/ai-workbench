@@ -20,6 +20,11 @@ const {
   shouldFallbackAfterUpstreamResult,
 } = require('./credentialFallbackService.cjs');
 const { credentialUsageError } = require('./credentialService.cjs');
+const {
+  guardCancelledAfterUpstream,
+  guardCancelledBeforeStart,
+  prepareGenerationTask,
+} = require('./generationTaskSkeleton.cjs');
 const { fetchPublicUrl } = require('./networkGuard.cjs');
 const { getImageProviderAdapter } = require('./imageProviderAdapters.cjs');
 const { getPublicBaseUrl } = require('./mediaUrlService.cjs');
@@ -158,26 +163,18 @@ function createImageGenerationService({
 }) {
   async function runImageTask({ req, userId, body = {}, secrets, task }) {
     const startedAt = Date.now();
-    const activeTask = task || createImageTask(userId, {
-      ...body,
-      publicBaseUrl: body.publicBaseUrl || getPublicBaseUrl(req),
-    }, 'running', taskRepository);
-    const taskBody = {
-      ...(activeTask.input || {}),
-      ...body,
-      publicBaseUrl: body.publicBaseUrl || activeTask.input?.publicBaseUrl || getPublicBaseUrl(req),
-    };
-    const workerReq = req || { headers: {}, publicBaseUrl: taskBody.publicBaseUrl };
+    const { activeTask, taskBody, workerReq } = prepareGenerationTask({
+      req,
+      body,
+      task,
+      createTask: (nextBody, status, repository) =>
+        createImageTask(userId, nextBody, status, repository),
+      taskRepository,
+    });
 
     try {
-      if (taskWasCancelled(activeTask.id, taskRepository)) {
-        taskRepository.addTaskLog(activeTask.id, {
-          level: 'warn',
-          event: 'cancelled_before_start',
-          message: 'Task was cancelled before the image worker started.',
-        });
-        return { status: 409, data: { error: 'Task was cancelled.' } };
-      }
+      const cancelledGuard = guardCancelledBeforeStart({ activeTask, taskRepository });
+      if (cancelledGuard) return cancelledGuard;
 
       const resolvedCredentials = await resolveApiCredentials({ userId, body: taskBody, secrets });
       const attempts = credentialAttempts(resolvedCredentials);
@@ -315,14 +312,15 @@ function createImageGenerationService({
         const saved = [];
 
         for (let i = 0; i < items.length; i += 1) {
-          if (taskWasCancelled(activeTask.id, taskRepository)) {
-            taskRepository.addTaskLog(activeTask.id, {
-              level: 'warn',
-              event: 'cancelled_after_upstream',
-              message: 'Image upstream request finished after cancellation; output was not written.',
-            });
-            return { status: 409, data: { error: 'Task was cancelled.' } };
-          }
+          const cancelledWhileDownloading = guardCancelledAfterUpstream({
+            activeTask,
+            taskRepository,
+            nodeType: 'Image',
+            output: null,
+            providerId,
+            model: normalizedImageBody.model,
+          });
+          if (cancelledWhileDownloading) return cancelledWhileDownloading;
 
           const payload = await resolveGeneratedImagePayload(items[i], i);
           if (payload) payloads.push(payload);
@@ -342,14 +340,15 @@ function createImageGenerationService({
         if (limitError) throw toExposedQuotaError(limitError);
 
         for (const payload of payloads) {
-          if (taskWasCancelled(activeTask.id, taskRepository)) {
-            taskRepository.addTaskLog(activeTask.id, {
-              level: 'warn',
-              event: 'cancelled_after_upstream',
-              message: 'Image upstream request finished after cancellation; output was not written.',
-            });
-            return { status: 409, data: { error: 'Task was cancelled.' } };
-          }
+          const cancelledWhileSaving = guardCancelledAfterUpstream({
+            activeTask,
+            taskRepository,
+            nodeType: 'Image',
+            output: null,
+            providerId,
+            model: capabilityResult.body.model,
+          });
+          if (cancelledWhileSaving) return cancelledWhileSaving;
 
           const asset = await saveGeneratedImage({
             assetRepository,

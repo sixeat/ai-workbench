@@ -330,8 +330,13 @@ function AuthGate({ authInfo, onSuccess }: AuthGateProps) {
                 <TextInput label="邮箱" type="email" value={email} onChange={setEmail} required />
                 <TextInput label="昵称" value={name} onChange={setName} required />
                 <TextInput label="密码" type="password" value={password} onChange={setPassword} required />
-                {registration?.requireInvitationCode && (
-                  <TextInput label="邀请码" value={invitationCode} onChange={setInvitationCode} required />
+                {canRegister && (
+                  <TextInput
+                    label={registration?.requireInvitationCode && !registration.allowPublicRegistration ? '邀请码' : '邀请码（选填）'}
+                    value={invitationCode}
+                    onChange={setInvitationCode}
+                    required={Boolean(registration?.requireInvitationCode && !registration.allowPublicRegistration)}
+                  />
                 )}
                 <SubmitButton loading={loading}>发送验证码</SubmitButton>
               </form>

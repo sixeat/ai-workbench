@@ -10,6 +10,8 @@
     "build": "tsc -b && vite build",
     "check:deploy": "node server/deploymentCheck.cjs",
     "check:mojibake": "node scripts/checkMojibake.cjs",
+    "check:registry-sync": "node scripts/checkRegistrySync.cjs",
+    "export:node-registry": "node --import tsx scripts/exportNodeRegistry.mjs",
     "lint": "oxlint",
     "test": "node --test --import tsx \"src/**/*.test.ts\" \"server/**/*.test.cjs\"",
     "preview": "vite preview",

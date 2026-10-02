@@ -1,3 +1,13 @@
+// 积分定价。
+//
+// 单价有三个来源，按优先级从高到低：
+//   1. 调用方显式传入的 modelCreditCost（平台模型上的覆盖价）
+//   2. 选中模型能力表里的 creditCost（按模型分档，见 modelCapabilities.cjs 的 preset）
+//   3. 全局默认单价（环境变量，兜底）
+//
+// 为什么要按模型分档：不同模型的上游成本差好几个量级——
+// 文本约 ¥0.005/次、图片约 ¥0.4/张、视频约 ¥3/条（5 秒 720P）。
+// 用同一套全局单价收所有模型，低档会亏、高档会赶客。
 const DEFAULT_PRICES = Object.freeze({
   imagePerItem: 10,
   textPerRequest: 1,
@@ -50,41 +60,85 @@ function videoSeconds(body = {}, prices = DEFAULT_PRICES) {
   return positiveInteger(body.duration ?? body.seconds ?? body.videoSeconds, prices.videoDefaultSeconds);
 }
 
+/**
+ * 只挑出有效的成本字段。
+ *
+ * 刻意不把 `0` 当成"缺失"——显式写 0 表示免费，是合法配置。
+ * 但负数与非法值要忽略，否则会算出负价。
+ */
+function sanitizeCreditCost(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const result = {};
+  for (const key of ['imagePerItem', 'textPerRequest', 'videoPerSecond']) {
+    if (!Object.hasOwn(value, key)) continue;
+    const number = Number(value[key]);
+    if (!Number.isFinite(number) || number < 0) continue;
+    result[key] = number;
+  }
+  return result;
+}
+
+/**
+ * 解析某次调用实际适用的单价。
+ *
+ * 逐字段回退：模型只声明了 videoPerSecond 时，图片与文本仍走全局默认，
+ * 这样 preset 可以只写关心的那一项。
+ */
+function resolveUnitPrices({ modelCreditCost, prices, nodeType }) {
+  const modelCost = sanitizeCreditCost(modelCreditCost);
+  const key = nodeType === 'image' ? 'imagePerItem' : nodeType === 'video' ? 'videoPerSecond' : 'textPerRequest';
+  const modelUnit = Object.hasOwn(modelCost, key) ? modelCost[key] : undefined;
+  return {
+    modelUnit,
+    prices: { ...prices, ...modelCost },
+    source: modelUnit === undefined ? 'global' : 'model',
+    unit: modelUnit === undefined ? prices[key] : modelUnit,
+  };
+}
+
 function createCreditPricingService({ env = process.env, prices: priceOverrides = {} } = {}) {
   const prices = {
     ...resolveCreditPrices(env),
     ...priceOverrides,
   };
 
-  function estimate({ body = {}, keyScope = 'server', nodeType }) {
+  /**
+   * 估算一次任务的积分消耗。
+   *
+   * @param modelCreditCost 选中模型声明的单价（能力表的 creditCost，或平台模型覆盖价）
+   */
+  function estimate({ body = {}, keyScope = 'server', modelCreditCost, nodeType }) {
     const normalizedNodeType = String(nodeType || '').trim().toLowerCase();
     const normalizedKeyScope = normalizeKeyScope(keyScope);
     const multiplier = multiplierForKeyScope(normalizedKeyScope, prices);
-    let unit = 0;
+    const resolved = resolveUnitPrices({ modelCreditCost, nodeType: normalizedNodeType, prices });
+
     let quantity = 1;
     let unitName = 'request';
 
     if (normalizedNodeType === 'text') {
-      unit = prices.textPerRequest;
       quantity = 1;
     } else if (normalizedNodeType === 'image') {
-      unit = prices.imagePerItem;
       quantity = imageQuantity(body);
       unitName = 'image';
     } else if (normalizedNodeType === 'video') {
-      unit = prices.videoPerSecond;
-      quantity = videoSeconds(body, prices);
+      // 时长缺失时用全局默认秒数；模型也可以声明自己的默认时长
+      quantity = positiveInteger(
+        body.duration ?? body.seconds ?? body.videoSeconds,
+        positiveInteger(resolved.prices.videoDefaultSeconds ?? prices.videoDefaultSeconds, prices.videoDefaultSeconds)
+      );
       unitName = 'second';
     }
 
-    const cost = Math.max(0, Math.ceil(unit * quantity * multiplier));
+    const cost = Math.max(0, Math.ceil(resolved.unit * quantity * multiplier));
     return {
       billable: cost > 0,
       cost,
       keyScope: normalizedKeyScope,
       nodeType: normalizedNodeType,
+      priceSource: resolved.source,
       quantity,
-      unit,
+      unit: resolved.unit,
       unitName,
     };
   }
@@ -101,5 +155,7 @@ module.exports = {
   imageQuantity,
   normalizeKeyScope,
   resolveCreditPrices,
+  resolveUnitPrices,
+  sanitizeCreditCost,
   videoSeconds,
 };

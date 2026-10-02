@@ -147,6 +147,54 @@ test('auth email flow service requests and verifies invitation registration', as
   }
 });
 
+test('auth email flow service allows public registration without an invitation and honors an optional invitation', async () => {
+  const authRepository = createAuthRepository();
+  const deliveries = [];
+  const rawInvitationCode = 'OPTIONAL-ADMIN-1';
+  authRepository.invitations.set(hashInvitationCode(rawInvitationCode), {
+    disabledAt: null,
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    id: 'optional-invitation-1',
+    label: 'Optional admin invite',
+    maxUses: 1,
+    role: 'admin',
+    usedCount: 0,
+  });
+
+  const service = createAuthEmailFlowService({
+    allowPublicRegistration: true,
+    authRepository,
+    deploymentMode: 'local',
+    emailCodeTtlMinutes: 10,
+    requireInvitationCode: false,
+    sendVerificationEmail: createMailer(deliveries),
+  });
+
+  const publicRequest = await service.requestRegistration({
+    email: 'public@example.com',
+    name: 'Public User',
+    password: 'register-password-123',
+  });
+  const publicUser = service.verifyRegistration({
+    code: publicRequest.delivery.devCode,
+    email: publicRequest.email,
+  });
+  assert.equal(publicUser.role, 'user');
+
+  const invitedRequest = await service.requestRegistration({
+    email: 'optional-admin@example.com',
+    invitationCode: rawInvitationCode,
+    name: 'Optional Admin',
+    password: 'register-password-456',
+  });
+  const invitedUser = service.verifyRegistration({
+    code: invitedRequest.delivery.devCode,
+    email: invitedRequest.email,
+  });
+  assert.equal(invitedUser.role, 'admin');
+  assert.equal(authRepository.invitations.get(hashInvitationCode(rawInvitationCode)).usedCount, 1);
+});
+
 test('auth email flow service hides unknown password reset accounts and resets enabled users', async () => {
   const authRepository = createAuthRepository();
   const deliveries = [];

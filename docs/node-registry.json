@@ -1,0 +1,1834 @@
+{
+  "$comment": "这是生成物，来源 src/data/nodeRegistry.ts。请勿手改本文件；改节点定义后重新运行 scripts/exportNodeRegistry.mjs。新前端的节点库必须严格照此陈设：不新增类型、不删除类型、不改端口 id 与类型。",
+  "generatedFrom": "src/data/nodeRegistry.ts + src/types/nodes.ts",
+  "version": 1,
+  "summary": {
+    "nodeTypeCount": 22,
+    "visibleNodeTypeCount": 19,
+    "hiddenNodeTypeCount": 3,
+    "categories": {
+      "input": "输入",
+      "parameter": "参数",
+      "text": "文本/剧本",
+      "image": "图片",
+      "video": "视频",
+      "utility": "工具",
+      "output": "输出"
+    },
+    "portTypes": {
+      "string": {
+        "label": "字符串",
+        "acceptsFrom": [
+          "string",
+          "text",
+          "prompt",
+          "script",
+          "any"
+        ]
+      },
+      "number": {
+        "label": "数字",
+        "acceptsFrom": [
+          "number",
+          "any"
+        ]
+      },
+      "text": {
+        "label": "文本",
+        "acceptsFrom": [
+          "text",
+          "string",
+          "prompt",
+          "script",
+          "any"
+        ]
+      },
+      "prompt": {
+        "label": "提示词",
+        "acceptsFrom": [
+          "prompt",
+          "any"
+        ]
+      },
+      "script": {
+        "label": "剧本",
+        "acceptsFrom": [
+          "script",
+          "any"
+        ]
+      },
+      "shotList": {
+        "label": "分镜列表",
+        "acceptsFrom": [
+          "shotList",
+          "any"
+        ]
+      },
+      "image": {
+        "label": "图片",
+        "acceptsFrom": [
+          "image",
+          "any"
+        ]
+      },
+      "video": {
+        "label": "视频",
+        "acceptsFrom": [
+          "video",
+          "any"
+        ]
+      },
+      "parameter": {
+        "label": "参数",
+        "acceptsFrom": [
+          "parameter",
+          "any"
+        ]
+      },
+      "asset": {
+        "label": "素材",
+        "acceptsFrom": [
+          "asset",
+          "image",
+          "video",
+          "shotList",
+          "any"
+        ]
+      },
+      "any": {
+        "label": "任意",
+        "acceptsFrom": [
+          "*"
+        ]
+      }
+    }
+  },
+  "persistence": {
+    "saveEndpoint": {
+      "create": "POST /api/workflows",
+      "update": "PUT /api/workflows/:workflowId",
+      "note": "nodes 与 edges 以整图 JSON 提交，服务端不做拆分。nodeCount 由服务端按 nodes.length 推导，客户端传了也会被忽略。"
+    },
+    "workflowRequestBody": {
+      "name": "string（默认 \"Untitled workflow\"，超长报 400）",
+      "description": "string（默认 \"\"）",
+      "nodes": "WorkflowNode[]",
+      "edges": "WorkflowEdge[]",
+      "metadata": "object（可选，默认 {}，按 UTF-8 计不超过 64 KB）",
+      "createdAt": "string（可选，ISO 8601；非法值会被丢弃）"
+    },
+    "workflowResponseShape": {
+      "id": "string",
+      "userId": "string",
+      "name": "string",
+      "description": "string",
+      "nodes": "WorkflowNode[]",
+      "edges": "WorkflowEdge[]",
+      "metadata": "object",
+      "nodeCount": "number（服务端推导）",
+      "createdAt": "string",
+      "updatedAt": "string"
+    },
+    "limits": {
+      "maxNodes": 500,
+      "maxEdges": 1000,
+      "maxIdLength": 160,
+      "maxNameLength": 160,
+      "maxDescriptionLength": 4000,
+      "maxMetadataBytes": 65536
+    },
+    "workflowShape": {
+      "nodes": "WorkflowNode[]",
+      "edges": "WorkflowEdge[]"
+    },
+    "nodeRequiredFields": {
+      "id": "string",
+      "type": "string（本清单里的 type 之一）",
+      "position": "{ x: number, y: number }",
+      "data": {
+        "label": "string",
+        "type": "string（同 node.type）",
+        "config": "Record<string, unknown>（键取自该节点的 configFields）",
+        "inputs": "Record<string, unknown>（执行时填充，前端不必预置）",
+        "outputs": "Record<string, unknown>（执行时填充，前端不必预置）",
+        "status": "'idle' | 'running' | 'completed' | 'error'"
+      }
+    },
+    "edgeRequiredFields": {
+      "id": "string",
+      "source": "string（源节点 id）",
+      "target": "string（目标节点 id）",
+      "sourceHandle": "string | null（用 '__main_output' 表示由后端按 primaryOutput 推断）",
+      "targetHandle": "string | null（用 '__main_input' 表示由后端推断目标输入）",
+      "data": "{ sourceKey?: string, targetKey?: string }"
+    },
+    "sentinels": {
+      "mainOutput": "__main_output",
+      "mainInput": "__main_input",
+      "note": "拖拽产生的连线只带 handle 时，用哨兵表示「按规则推断」。显式指定时写具体端口 id。"
+    },
+    "primaryOutput": "取 connection.primaryOutput，否则 outputs[0].id，否则 \"content\""
+  },
+  "creditPricing": {
+    "note": "任务在入队时即扣费，只有服务端 Key（server_key）会扣；用户自有 Key 不扣积分。 creditCost 支持 textPerRequest / imagePerItem / videoPerSecond 三个字段，按字段逐层回退：平台模型能力表 → 平台模型路由所指 apiKeyModel → 直接选的 apiKeyModel → 按 model+provider 回算 preset → 全局默认价。0 是合法的免费定价，不是\"未配置\"。",
+    "units": {
+      "imagePerItem": "每张图片消耗的积分",
+      "textPerRequest": "每次文本请求消耗的积分",
+      "videoPerSecond": "每秒视频消耗的积分（时长不足 1 秒按 1 秒计）"
+    },
+    "fallbackDefaults": {
+      "imagePerItem": 10,
+      "textPerRequest": 1,
+      "userKeyMultiplier": 0,
+      "videoDefaultSeconds": 5,
+      "videoPerSecond": 20
+    },
+    "benchmark": "图片 10 积分 ≈ ¥0.4；文本 1 积分 ≈ ¥0.005；视频 75 积分/秒 ≈ ¥0.6",
+    "presets": [
+      {
+        "creditCost": {
+          "imagePerItem": 10
+        },
+        "label": "万相 2.7 图片",
+        "modelPattern": "wan2.7-image*",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "imagePerItem": 30
+        },
+        "label": "万相 2.7 图片 Pro",
+        "modelPattern": "wan2.7-image-pro",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "imagePerItem": 10
+        },
+        "label": "万相 2.6 图片",
+        "modelPattern": "wan2.6-image",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "videoPerSecond": 75
+        },
+        "label": "万相文生视频",
+        "modelPattern": "wan*-t2v*",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "videoPerSecond": 75
+        },
+        "label": "万相 2.7 文生视频",
+        "modelPattern": "wan2.7-t2v*",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "videoPerSecond": 75
+        },
+        "label": "万相图生视频",
+        "modelPattern": "wan*-i2v*",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "videoPerSecond": 75
+        },
+        "label": "万相 2.7 图生视频",
+        "modelPattern": "wan2.7-*-i2v*",
+        "providerId": "aliyun-bailian"
+      },
+      {
+        "creditCost": {
+          "imagePerItem": 10
+        },
+        "label": "Wanx 2.1 Text to Image",
+        "modelPattern": "wanx2.1-t2i-*",
+        "providerId": "aliyun-bailian"
+      }
+    ]
+  },
+  "mustNotInvent": {
+    "reason": "后端执行链路只认识本清单里的节点类型。新增类型不会报错，但保存后无法执行或行为不可预期。",
+    "forbiddenExamples": [
+      "条件分支 / 条件判断（执行引擎只做拓扑排序与循环检测，没有条件求值或分支跳转）",
+      "循环 / 迭代节点",
+      "知识库 / 向量检索节点（后端无此能力）",
+      "工具调用 / 函数调用节点（后端无此能力）",
+      "触发器类节点（入口只能是文本输入与图片输入）",
+      "任意形式的多分支路由"
+    ]
+  },
+  "nodes": [
+    {
+      "type": "textInput",
+      "label": "文本输入",
+      "category": "input",
+      "icon": "Type",
+      "color": "#10b981",
+      "description": "输入主题、要求或普通 prompt。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "text",
+          "label": "文本",
+          "type": "text"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "content",
+          "label": "内容",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "输入主题、要求或 prompt..."
+        }
+      ]
+    },
+    {
+      "type": "imageInput",
+      "label": "图片输入",
+      "category": "input",
+      "icon": "Image",
+      "color": "#22c55e",
+      "description": "上传图片，或从素材库选择历史图片。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "image",
+          "label": "图片",
+          "type": "image"
+        },
+        {
+          "id": "url",
+          "label": "URL",
+          "type": "string"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "url",
+          "label": "图片 URL",
+          "type": "text",
+          "defaultValue": "",
+          "placeholder": "/api/assets/... 或 https://..."
+        },
+        {
+          "key": "prompt",
+          "label": "来源提示词",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "可选，用于记录图片来源。"
+        }
+      ]
+    },
+    {
+      "type": "multiImageInput",
+      "label": "多图输入",
+      "category": "input",
+      "icon": "Images",
+      "color": "#14b8a6",
+      "description": "兼容旧工作流。新建时建议使用多个图片输入节点。",
+      "hidden": true,
+      "hiddenReason": "仅用于兼容旧工作流，新建时不应出现在节点面板",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "images",
+          "label": "图片列表",
+          "type": "asset"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "urls",
+          "label": "图片 URL 列表",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "每行一个图片 URL"
+        }
+      ]
+    },
+    {
+      "type": "promptParam",
+      "label": "Prompt 参数",
+      "category": "parameter",
+      "icon": "MessageSquareText",
+      "color": "#f97316",
+      "description": "复用正向提示词。连线后会覆盖生成节点内部 Prompt。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "prompt"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "prompt",
+          "label": "Prompt",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "输入正向提示词..."
+        }
+      ]
+    },
+    {
+      "type": "negativePromptParam",
+      "label": "反向词参数",
+      "category": "parameter",
+      "icon": "Ban",
+      "color": "#fb7185",
+      "description": "复用反向提示词。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "negativePrompt",
+          "label": "反向词",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "negativePrompt",
+          "label": "反向提示词",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "low quality, blurry..."
+        }
+      ]
+    },
+    {
+      "type": "styleParam",
+      "label": "风格参数",
+      "category": "parameter",
+      "icon": "Palette",
+      "color": "#a855f7",
+      "description": "把同一个风格复用到多个生成节点。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "style",
+          "label": "风格",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "style",
+          "label": "风格",
+          "type": "select",
+          "defaultValue": "cinematic",
+          "options": [
+            {
+              "label": "不追加风格",
+              "value": "none"
+            },
+            {
+              "label": "电影感",
+              "value": "cinematic"
+            },
+            {
+              "label": "写实",
+              "value": "realistic"
+            },
+            {
+              "label": "动漫",
+              "value": "anime"
+            },
+            {
+              "label": "国风",
+              "value": "chinese-style"
+            },
+            {
+              "label": "产品摄影",
+              "value": "product-photo"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "sizeParam",
+      "label": "尺寸参数",
+      "category": "parameter",
+      "icon": "Maximize2",
+      "color": "#38bdf8",
+      "description": "覆盖图片生成尺寸。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "size",
+          "label": "尺寸",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "size",
+          "label": "尺寸",
+          "type": "select",
+          "defaultValue": "1024x1024",
+          "options": [
+            {
+              "label": "1K",
+              "value": "1K"
+            },
+            {
+              "label": "2K",
+              "value": "2K"
+            },
+            {
+              "label": "4K",
+              "value": "4K"
+            },
+            {
+              "label": "1:1 1024x1024",
+              "value": "1024x1024"
+            },
+            {
+              "label": "16:9 1792x1024",
+              "value": "1792x1024"
+            },
+            {
+              "label": "9:16 1024x1792",
+              "value": "1024x1792"
+            },
+            {
+              "label": "512x512",
+              "value": "512x512"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "qualityParam",
+      "label": "质量参数",
+      "category": "parameter",
+      "icon": "BadgeCheck",
+      "color": "#eab308",
+      "description": "覆盖生成质量。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "quality",
+          "label": "质量",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "quality",
+          "label": "质量",
+          "type": "select",
+          "defaultValue": "auto",
+          "options": [
+            {
+              "label": "auto",
+              "value": "auto"
+            },
+            {
+              "label": "low",
+              "value": "low"
+            },
+            {
+              "label": "medium",
+              "value": "medium"
+            },
+            {
+              "label": "high",
+              "value": "high"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "seedParam",
+      "label": "Seed 参数",
+      "category": "parameter",
+      "icon": "Hash",
+      "color": "#64748b",
+      "description": "固定随机种子，方便复现结果。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "seed",
+          "label": "Seed",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "seed",
+          "label": "Seed",
+          "type": "number",
+          "defaultValue": 0
+        }
+      ]
+    },
+    {
+      "type": "countParam",
+      "label": "数量参数",
+      "category": "parameter",
+      "icon": "ListPlus",
+      "color": "#84cc16",
+      "description": "覆盖批量生成张数。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "count",
+          "label": "数量",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "count",
+          "label": "数量",
+          "type": "number",
+          "defaultValue": 1
+        }
+      ]
+    },
+    {
+      "type": "referenceStrengthParam",
+      "label": "参考强度参数",
+      "category": "parameter",
+      "icon": "SlidersHorizontal",
+      "color": "#ec4899",
+      "description": "有参考图时覆盖参考强度。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "strength",
+          "label": "强度",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "strength",
+          "label": "强度 0-1",
+          "type": "number",
+          "defaultValue": 0.65
+        }
+      ]
+    },
+    {
+      "type": "shotParam",
+      "label": "镜头参数",
+      "category": "parameter",
+      "icon": "Clapperboard",
+      "color": "#0ea5e9",
+      "description": "复用景别、镜头运动、光照和角色一致性要求。",
+      "inputs": [],
+      "outputs": [
+        {
+          "id": "shotParams",
+          "label": "镜头参数",
+          "type": "parameter"
+        }
+      ],
+      "configFields": [
+        {
+          "key": "camera",
+          "label": "镜头",
+          "type": "text",
+          "defaultValue": "medium shot, slow dolly in"
+        },
+        {
+          "key": "lighting",
+          "label": "光照",
+          "type": "text",
+          "defaultValue": "soft cinematic lighting"
+        },
+        {
+          "key": "character",
+          "label": "角色一致性",
+          "type": "text",
+          "defaultValue": ""
+        }
+      ]
+    },
+    {
+      "type": "textModel",
+      "label": "文本模型",
+      "category": "text",
+      "icon": "Brain",
+      "color": "#3b82f6",
+      "description": "调用通用文本生成模型。",
+      "inputs": [
+        {
+          "id": "prompt",
+          "label": "提示词",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "system",
+          "label": "系统提示",
+          "type": "text"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "text",
+          "label": "文本",
+          "type": "text"
+        },
+        {
+          "id": "reasoning",
+          "label": "推理",
+          "type": "text"
+        }
+      ],
+      "connection": {
+        "defaultInput": "prompt"
+      },
+      "configFields": [
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "defaultValue": "gpt-4o",
+          "options": []
+        },
+        {
+          "key": "temperature",
+          "label": "温度",
+          "type": "number",
+          "required": true,
+          "defaultValue": 0.7
+        },
+        {
+          "key": "maxTokens",
+          "label": "最大 Token",
+          "type": "number",
+          "required": true,
+          "defaultValue": 2000
+        }
+      ]
+    },
+    {
+      "type": "script",
+      "label": "剧本生成",
+      "category": "text",
+      "icon": "FileText",
+      "color": "#8b5cf6",
+      "description": "输入主题，输出结构化剧本。",
+      "inputs": [
+        {
+          "id": "prompt",
+          "label": "主题",
+          "type": "text",
+          "required": true
+        },
+        {
+          "id": "outline",
+          "label": "大纲",
+          "type": "text"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "script",
+          "label": "剧本",
+          "type": "script"
+        },
+        {
+          "id": "text",
+          "label": "文本",
+          "type": "text"
+        }
+      ],
+      "connection": {
+        "defaultInput": "prompt"
+      },
+      "configFields": [
+        {
+          "key": "modelSource",
+          "label": "模型来源",
+          "type": "select",
+          "defaultValue": "inherit",
+          "options": [
+            {
+              "label": "继承上游模型",
+              "value": "inherit"
+            },
+            {
+              "label": "使用全局默认模型",
+              "value": "globalDefault"
+            },
+            {
+              "label": "使用平台模型",
+              "value": "platform"
+            },
+            {
+              "label": "手动指定模型",
+              "value": "manual"
+            },
+            {
+              "label": "仅本地规则",
+              "value": "localOnly"
+            }
+          ]
+        },
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "defaultValue": "gpt-4o",
+          "options": []
+        },
+        {
+          "key": "scenes",
+          "label": "场景数",
+          "type": "number",
+          "defaultValue": 5
+        },
+        {
+          "key": "characters",
+          "label": "角色数",
+          "type": "number",
+          "defaultValue": 3
+        },
+        {
+          "key": "style",
+          "label": "风格",
+          "type": "text",
+          "defaultValue": "电影感",
+          "placeholder": "电影、短剧、动画、广告等"
+        }
+      ]
+    },
+    {
+      "type": "shotSplit",
+      "label": "分镜拆解",
+      "category": "text",
+      "icon": "Clapperboard",
+      "color": "#7c3aed",
+      "description": "把剧本或文本拆成 ShotList。",
+      "inputs": [
+        {
+          "id": "script",
+          "label": "剧本/文本",
+          "type": "any",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "shotList",
+          "label": "分镜列表",
+          "type": "shotList"
+        },
+        {
+          "id": "text",
+          "label": "文本预览",
+          "type": "text"
+        }
+      ],
+      "connection": {
+        "defaultInput": "script"
+      },
+      "configFields": [
+        {
+          "key": "modelSource",
+          "label": "模型来源",
+          "type": "select",
+          "defaultValue": "inherit",
+          "options": [
+            {
+              "label": "继承上游模型",
+              "value": "inherit"
+            },
+            {
+              "label": "使用全局默认模型",
+              "value": "globalDefault"
+            },
+            {
+              "label": "使用平台模型",
+              "value": "platform"
+            },
+            {
+              "label": "手动指定模型",
+              "value": "manual"
+            },
+            {
+              "label": "仅本地规则",
+              "value": "localOnly"
+            }
+          ]
+        },
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "defaultValue": "gpt-4o",
+          "options": []
+        },
+        {
+          "key": "count",
+          "label": "镜头数",
+          "type": "number",
+          "defaultValue": 5
+        },
+        {
+          "key": "defaultDuration",
+          "label": "单镜头时长",
+          "type": "number",
+          "defaultValue": 4
+        },
+        {
+          "key": "temperature",
+          "label": "创作温度",
+          "type": "number",
+          "defaultValue": 0.5
+        },
+        {
+          "key": "maxTokens",
+          "label": "最大 Token",
+          "type": "number",
+          "defaultValue": 2500
+        }
+      ]
+    },
+    {
+      "type": "promptOptimize",
+      "label": "提示词优化",
+      "category": "text",
+      "icon": "Sparkles",
+      "color": "#06b6d4",
+      "description": "把文本或分镜变成图像提示词。",
+      "inputs": [
+        {
+          "id": "content",
+          "label": "文本/分镜",
+          "type": "any",
+          "required": true
+        },
+        {
+          "id": "style",
+          "label": "风格",
+          "type": "parameter"
+        },
+        {
+          "id": "shotParams",
+          "label": "镜头参数",
+          "type": "parameter"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "prompt"
+        },
+        {
+          "id": "shotList",
+          "label": "分镜列表",
+          "type": "shotList"
+        },
+        {
+          "id": "text",
+          "label": "文本预览",
+          "type": "text"
+        }
+      ],
+      "connection": {
+        "defaultInput": "content",
+        "targetBySource": {
+          "style": "style",
+          "shotParams": "shotParams"
+        }
+      },
+      "configFields": [
+        {
+          "key": "modelSource",
+          "label": "模型来源",
+          "type": "select",
+          "defaultValue": "inherit",
+          "options": [
+            {
+              "label": "继承上游模型",
+              "value": "inherit"
+            },
+            {
+              "label": "使用全局默认模型",
+              "value": "globalDefault"
+            },
+            {
+              "label": "使用平台模型",
+              "value": "platform"
+            },
+            {
+              "label": "手动指定模型",
+              "value": "manual"
+            },
+            {
+              "label": "仅本地规则",
+              "value": "localOnly"
+            }
+          ]
+        },
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "defaultValue": "gpt-4o",
+          "options": []
+        },
+        {
+          "key": "prefix",
+          "label": "前缀",
+          "type": "textarea",
+          "defaultValue": "high quality, detailed, cinematic composition"
+        },
+        {
+          "key": "negativePrompt",
+          "label": "默认反向词",
+          "type": "textarea",
+          "defaultValue": "low quality, blurry, distorted"
+        },
+        {
+          "key": "temperature",
+          "label": "创作温度",
+          "type": "number",
+          "defaultValue": 0.6
+        },
+        {
+          "key": "maxTokens",
+          "label": "最大 Token",
+          "type": "number",
+          "defaultValue": 2500
+        }
+      ]
+    },
+    {
+      "type": "imageGen",
+      "label": "图片生成",
+      "category": "image",
+      "icon": "Image",
+      "color": "#f59e0b",
+      "description": "统一支持文生图、图生图、多参考图和分镜批量生图。",
+      "inputs": [
+        {
+          "id": "prompt",
+          "label": "Prompt/ShotList",
+          "type": "any",
+          "required": true
+        },
+        {
+          "id": "referenceImage",
+          "label": "参考图",
+          "type": "image"
+        },
+        {
+          "id": "referenceImages",
+          "label": "参考图组",
+          "type": "asset"
+        },
+        {
+          "id": "negativePrompt",
+          "label": "反向词",
+          "type": "parameter"
+        },
+        {
+          "id": "style",
+          "label": "风格",
+          "type": "parameter"
+        },
+        {
+          "id": "size",
+          "label": "尺寸",
+          "type": "parameter"
+        },
+        {
+          "id": "quality",
+          "label": "质量",
+          "type": "parameter"
+        },
+        {
+          "id": "seed",
+          "label": "Seed",
+          "type": "parameter"
+        },
+        {
+          "id": "count",
+          "label": "数量",
+          "type": "parameter"
+        },
+        {
+          "id": "strength",
+          "label": "参考强度",
+          "type": "parameter"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "image",
+          "label": "图片",
+          "type": "image"
+        },
+        {
+          "id": "images",
+          "label": "图片列表",
+          "type": "asset"
+        },
+        {
+          "id": "shotList",
+          "label": "带图分镜",
+          "type": "shotList"
+        },
+        {
+          "id": "url",
+          "label": "URL",
+          "type": "string"
+        }
+      ],
+      "connection": {
+        "defaultInput": "prompt",
+        "targetBySource": {
+          "negativePrompt": "negativePrompt",
+          "style": "style",
+          "size": "size",
+          "quality": "quality",
+          "seed": "seed",
+          "count": "count",
+          "strength": "strength",
+          "images": "referenceImages"
+        },
+        "imageInput": {
+          "sourceKeys": [
+            "image"
+          ],
+          "singleInput": "referenceImage",
+          "multipleInput": "referenceImages"
+        }
+      },
+      "configFields": [
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "required": true,
+          "defaultValue": "gpt-image-1",
+          "options": []
+        },
+        {
+          "key": "prompt",
+          "label": "Prompt",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "没有连线输入时使用这里的 Prompt。"
+        },
+        {
+          "key": "negativePrompt",
+          "label": "反向词",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "low quality, blurry..."
+        },
+        {
+          "key": "style",
+          "label": "风格",
+          "type": "select",
+          "defaultValue": "none",
+          "options": [
+            {
+              "label": "不追加风格",
+              "value": "none"
+            },
+            {
+              "label": "电影感",
+              "value": "cinematic"
+            },
+            {
+              "label": "写实",
+              "value": "realistic"
+            },
+            {
+              "label": "动漫",
+              "value": "anime"
+            },
+            {
+              "label": "国风",
+              "value": "chinese-style"
+            },
+            {
+              "label": "产品摄影",
+              "value": "product-photo"
+            }
+          ]
+        },
+        {
+          "key": "size",
+          "label": "尺寸",
+          "type": "select",
+          "defaultValue": "1024x1024",
+          "options": [
+            {
+              "label": "1K",
+              "value": "1K"
+            },
+            {
+              "label": "2K",
+              "value": "2K"
+            },
+            {
+              "label": "4K",
+              "value": "4K"
+            },
+            {
+              "label": "1:1 1024x1024",
+              "value": "1024x1024"
+            },
+            {
+              "label": "16:9 1792x1024",
+              "value": "1792x1024"
+            },
+            {
+              "label": "9:16 1024x1792",
+              "value": "1024x1792"
+            },
+            {
+              "label": "512x512",
+              "value": "512x512"
+            }
+          ]
+        },
+        {
+          "key": "quality",
+          "label": "质量",
+          "type": "select",
+          "defaultValue": "auto",
+          "options": [
+            {
+              "label": "auto",
+              "value": "auto"
+            },
+            {
+              "label": "low",
+              "value": "low"
+            },
+            {
+              "label": "medium",
+              "value": "medium"
+            },
+            {
+              "label": "high",
+              "value": "high"
+            }
+          ]
+        },
+        {
+          "key": "n",
+          "label": "数量",
+          "type": "number",
+          "defaultValue": 1
+        },
+        {
+          "key": "seed",
+          "label": "Seed",
+          "type": "number",
+          "defaultValue": 0
+        },
+        {
+          "key": "strength",
+          "label": "参考强度",
+          "type": "number",
+          "defaultValue": 0.65
+        },
+        {
+          "key": "promptExtend",
+          "label": "智能改写 Prompt",
+          "type": "boolean",
+          "defaultValue": false
+        },
+        {
+          "key": "enableSequential",
+          "label": "组图连续性",
+          "type": "boolean",
+          "defaultValue": false
+        },
+        {
+          "key": "thinkingMode",
+          "label": "思考模式",
+          "type": "boolean",
+          "defaultValue": false
+        },
+        {
+          "key": "watermark",
+          "label": "水印",
+          "type": "boolean",
+          "defaultValue": false
+        },
+        {
+          "key": "responseFormat",
+          "label": "返回格式",
+          "type": "select",
+          "defaultValue": "b64_json",
+          "options": [
+            {
+              "label": "b64_json",
+              "value": "b64_json"
+            },
+            {
+              "label": "url",
+              "value": "url"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "imageToImage",
+      "label": "图生图",
+      "category": "image",
+      "icon": "Images",
+      "color": "#d97706",
+      "description": "兼容旧工作流。新建时建议使用“图片生成”并连接参考图。",
+      "hidden": true,
+      "hiddenReason": "仅用于兼容旧工作流，新建时不应出现在节点面板",
+      "inputs": [
+        {
+          "id": "image",
+          "label": "参考图",
+          "type": "image",
+          "required": true
+        },
+        {
+          "id": "prompt",
+          "label": "Prompt",
+          "type": "any"
+        },
+        {
+          "id": "strength",
+          "label": "参考强度",
+          "type": "parameter"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "image",
+          "label": "图片",
+          "type": "image"
+        },
+        {
+          "id": "url",
+          "label": "URL",
+          "type": "string"
+        }
+      ],
+      "connection": {
+        "defaultInput": "prompt",
+        "targetBySource": {
+          "image": "image",
+          "strength": "strength"
+        }
+      },
+      "configFields": [
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "required": true,
+          "defaultValue": "gpt-image-1",
+          "options": []
+        },
+        {
+          "key": "prompt",
+          "label": "Prompt",
+          "type": "textarea",
+          "defaultValue": ""
+        },
+        {
+          "key": "strength",
+          "label": "参考强度",
+          "type": "number",
+          "defaultValue": 0.65
+        },
+        {
+          "key": "size",
+          "label": "尺寸",
+          "type": "select",
+          "defaultValue": "1024x1024",
+          "options": [
+            {
+              "label": "1K",
+              "value": "1K"
+            },
+            {
+              "label": "2K",
+              "value": "2K"
+            },
+            {
+              "label": "4K",
+              "value": "4K"
+            },
+            {
+              "label": "1:1 1024x1024",
+              "value": "1024x1024"
+            },
+            {
+              "label": "16:9 1792x1024",
+              "value": "1792x1024"
+            },
+            {
+              "label": "9:16 1024x1792",
+              "value": "1024x1792"
+            },
+            {
+              "label": "512x512",
+              "value": "512x512"
+            }
+          ]
+        },
+        {
+          "key": "quality",
+          "label": "质量",
+          "type": "select",
+          "defaultValue": "auto",
+          "options": [
+            {
+              "label": "auto",
+              "value": "auto"
+            },
+            {
+              "label": "low",
+              "value": "low"
+            },
+            {
+              "label": "medium",
+              "value": "medium"
+            },
+            {
+              "label": "high",
+              "value": "high"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "videoGen",
+      "label": "视频生成",
+      "category": "video",
+      "icon": "Video",
+      "color": "#ef4444",
+      "description": "统一支持文生视频、图生视频、多图生视频和分镜生视频。",
+      "inputs": [
+        {
+          "id": "prompt",
+          "label": "提示词/分镜",
+          "type": "any"
+        },
+        {
+          "id": "image",
+          "label": "参考图",
+          "type": "image"
+        },
+        {
+          "id": "images",
+          "label": "参考图组/ShotList",
+          "type": "any"
+        },
+        {
+          "id": "duration",
+          "label": "时长",
+          "type": "parameter"
+        },
+        {
+          "id": "style",
+          "label": "风格",
+          "type": "parameter"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "video",
+          "label": "视频任务",
+          "type": "video"
+        },
+        {
+          "id": "task",
+          "label": "任务",
+          "type": "asset"
+        },
+        {
+          "id": "text",
+          "label": "任务说明",
+          "type": "text"
+        }
+      ],
+      "connection": {
+        "defaultInput": "prompt",
+        "targetBySource": {
+          "images": "images",
+          "shotList": "images",
+          "duration": "duration",
+          "style": "style"
+        },
+        "imageInput": {
+          "sourceKeys": [
+            "image"
+          ],
+          "singleInput": "image",
+          "multipleInput": "images"
+        }
+      },
+      "configFields": [
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "required": true,
+          "defaultValue": "doubao-seedance-2-0-mini-260615",
+          "options": []
+        },
+        {
+          "key": "mode",
+          "label": "生成模式",
+          "type": "select",
+          "defaultValue": "auto",
+          "options": [
+            {
+              "label": "自动识别输入",
+              "value": "auto"
+            },
+            {
+              "label": "文生视频",
+              "value": "text-to-video"
+            },
+            {
+              "label": "图生视频",
+              "value": "image-to-video"
+            },
+            {
+              "label": "多图生视频",
+              "value": "images-to-video"
+            },
+            {
+              "label": "分镜生视频",
+              "value": "shotlist-to-video"
+            }
+          ]
+        },
+        {
+          "key": "prompt",
+          "label": "视频描述",
+          "type": "textarea",
+          "defaultValue": "",
+          "placeholder": "没有连线输入时使用这里的视频描述。"
+        },
+        {
+          "key": "duration",
+          "label": "时长（秒）",
+          "type": "number",
+          "defaultValue": 5
+        },
+        {
+          "key": "aspectRatio",
+          "label": "比例",
+          "type": "select",
+          "defaultValue": "16:9",
+          "options": [
+            {
+              "label": "16:9 横屏",
+              "value": "16:9"
+            },
+            {
+              "label": "9:16 竖屏",
+              "value": "9:16"
+            },
+            {
+              "label": "1:1 方形",
+              "value": "1:1"
+            },
+            {
+              "label": "4:3 横屏",
+              "value": "4:3"
+            },
+            {
+              "label": "3:4 竖屏",
+              "value": "3:4"
+            }
+          ]
+        },
+        {
+          "key": "resolution",
+          "label": "分辨率",
+          "type": "select",
+          "defaultValue": "720P",
+          "options": [
+            {
+              "label": "1080P",
+              "value": "1080P"
+            },
+            {
+              "label": "720P",
+              "value": "720P"
+            },
+            {
+              "label": "480P",
+              "value": "480P"
+            }
+          ]
+        },
+        {
+          "key": "motion",
+          "label": "镜头运动",
+          "type": "text",
+          "defaultValue": "slow cinematic camera movement"
+        },
+        {
+          "key": "referenceVideoUrl",
+          "label": "参考视频 URL",
+          "type": "text",
+          "defaultValue": ""
+        },
+        {
+          "key": "referenceAudioUrl",
+          "label": "参考音频 URL",
+          "type": "text",
+          "defaultValue": ""
+        },
+        {
+          "key": "generateAudio",
+          "label": "生成音频",
+          "type": "boolean",
+          "defaultValue": false
+        },
+        {
+          "key": "promptExtend",
+          "label": "智能改写 Prompt",
+          "type": "boolean",
+          "defaultValue": true
+        },
+        {
+          "key": "seed",
+          "label": "Seed",
+          "type": "number",
+          "defaultValue": 0
+        },
+        {
+          "key": "negativePrompt",
+          "label": "反向提示词",
+          "type": "textarea",
+          "defaultValue": ""
+        },
+        {
+          "key": "watermark",
+          "label": "水印",
+          "type": "boolean",
+          "defaultValue": false
+        }
+      ]
+    },
+    {
+      "type": "multiImageVideo",
+      "label": "多图生视频",
+      "category": "video",
+      "icon": "Film",
+      "color": "#dc2626",
+      "description": "兼容旧工作流。新建时建议使用“视频生成”并连接图片组或 ShotList。",
+      "hidden": true,
+      "hiddenReason": "仅用于兼容旧工作流，新建时不应出现在节点面板",
+      "inputs": [
+        {
+          "id": "images",
+          "label": "图片数组/分镜",
+          "type": "any",
+          "required": true
+        },
+        {
+          "id": "prompt",
+          "label": "镜头描述",
+          "type": "text"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "video",
+          "label": "视频任务",
+          "type": "video"
+        },
+        {
+          "id": "task",
+          "label": "任务",
+          "type": "asset"
+        }
+      ],
+      "connection": {
+        "defaultInput": "prompt",
+        "targetBySource": {
+          "image": "images",
+          "images": "images",
+          "shotList": "images"
+        }
+      },
+      "configFields": [
+        {
+          "key": "instanceId",
+          "label": "API 实例",
+          "type": "select",
+          "required": true,
+          "options": []
+        },
+        {
+          "key": "model",
+          "label": "模型",
+          "type": "select",
+          "required": true,
+          "defaultValue": "seedance-video",
+          "options": []
+        },
+        {
+          "key": "duration",
+          "label": "时长（秒）",
+          "type": "number",
+          "defaultValue": 5
+        }
+      ]
+    },
+    {
+      "type": "preview",
+      "label": "预览",
+      "category": "output",
+      "icon": "Eye",
+      "color": "#0891b2",
+      "description": "自动展示文本、图片、视频和列表。",
+      "inputs": [
+        {
+          "id": "content",
+          "label": "内容",
+          "type": "any",
+          "required": true
+        }
+      ],
+      "outputs": [
+        {
+          "id": "content",
+          "label": "内容",
+          "type": "any"
+        }
+      ],
+      "connection": {
+        "defaultInput": "content"
+      },
+      "configFields": [
+        {
+          "key": "showRaw",
+          "label": "显示原始数据",
+          "type": "boolean",
+          "defaultValue": false
+        }
+      ]
+    },
+    {
+      "type": "merge",
+      "label": "合并",
+      "category": "utility",
+      "icon": "Combine",
+      "color": "#84cc16",
+      "description": "合并多个文本或结构化输入。",
+      "inputs": [
+        {
+          "id": "a",
+          "label": "输入 A",
+          "type": "any"
+        },
+        {
+          "id": "b",
+          "label": "输入 B",
+          "type": "any"
+        }
+      ],
+      "outputs": [
+        {
+          "id": "merged",
+          "label": "合并结果",
+          "type": "text"
+        }
+      ],
+      "connection": {
+        "defaultInput": "a",
+        "roundRobinInputs": [
+          "a",
+          "b"
+        ]
+      },
+      "configFields": [
+        {
+          "key": "separator",
+          "label": "分隔符",
+          "type": "text",
+          "defaultValue": "\n\n"
+        },
+        {
+          "key": "prefix",
+          "label": "前缀",
+          "type": "text",
+          "defaultValue": ""
+        },
+        {
+          "key": "suffix",
+          "label": "后缀",
+          "type": "text",
+          "defaultValue": ""
+        }
+      ]
+    }
+  ]
+}

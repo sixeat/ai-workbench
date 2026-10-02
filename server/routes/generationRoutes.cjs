@@ -96,6 +96,9 @@ function registerGenerationRoutes(app, context) {
   });
 
   return {
+    advanceVideoTask: generationTaskRequestService.advanceVideoTask,
+    enqueueImageTask: generationTaskRequestService.enqueueImageTask,
+    enqueueVideoTask: generationTaskRequestService.enqueueVideoTask,
     getGenerationQueueStats: generationWorker.getGenerationQueueStats,
     retryGenerationTask: generationTaskRequestService.retryGenerationTask,
     stopGenerationQueue: generationWorker.stopGenerationQueue,

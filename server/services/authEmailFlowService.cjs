@@ -152,12 +152,13 @@ function createAuthEmailFlowService(options = {}) {
     if (authRepository.getUserByEmail(email)) throw routeError(409, 'This email is already registered.');
 
     let invitation = null;
-    if (requireInvitationCode && !allowPublicRegistration) {
-      if (!invitationCode) throw routeError(400, 'Invitation code is required.');
+    if (invitationCode) {
       invitation = authRepository.getInvitationCodeByHash(hashInvitationCode(invitationCode));
       if (!publicInvitationCode(invitation)?.isActive) {
         throw routeError(400, 'Invitation code is invalid or expired.');
       }
+    } else if (requireInvitationCode && !allowPublicRegistration) {
+      throw routeError(400, 'Invitation code is required.');
     }
 
     const code = createVerificationCode();

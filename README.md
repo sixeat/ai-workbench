@@ -104,6 +104,10 @@ flowchart LR
 | [服务器部署](docs/server-deploy.md) | 服务器部署、PM2、端口和故障排查 |
 | [前端静态托管](docs/frontend-static-hosting.md) | Nginx、Vercel、OSS/CDN 托管前端 |
 | [API 设计](docs/api-design-v2.md) | 后端 API 和数据结构设计 |
+| [工作流执行语义](docs/workflow-execution-semantics.md) | 端口值类型、连线推断、22 种节点契约、执行顺序、指纹复用与校验规则 |
+| [API 契约](docs/api-contract.md) | 88 个路由清单、全局响应约定、鉴权模型与自动化契约检查说明 |
+| [节点清单（JSON）](docs/node-registry.json) | 机器可读的 22 种节点定义：端口、配色、配置字段、connection 规则。重写前端时作为陈设依据，`npm run export:node-registry` 重新生成 |
+| [流水线与 SaaS 落地方案](docs/pipeline-saas-roadmap.md) | 服务端工作流编排、积分定价、运维兜底、商业化与扩容的分阶段方案 |
 
 ## 常用命令
 

@@ -376,6 +376,198 @@ test('video task lookup normalizes provider task failure payloads', async () => 
   assert.equal(failedLog.data.error.upstreamTaskStatus, 'failed');
 });
 
+test('百炼视频任务：提交存对上游任务号，查询用对路径与凭据', async () => {
+  // 这两个都是真实踩过的坑：
+  // 1. summarizeVideoUpstream 先取 request_id，导致用「请求编号」当任务号去查（永远 UNKNOWN）
+  // 2. getVideoTask 只按 providerId 解析适配器，兜底成 seedance，
+  //    于是拿火山方舟的 /api/v3/... 路径去问百炼（永远 500）
+  const user = createUser({
+    email: 'video-bailian@example.com',
+    username: 'video-bailian@example.com',
+    name: 'Bailian Video',
+    passwordHash: 'test',
+  });
+  const calls = [];
+  const service = createVideoGenerationService({
+    assetStorage: new LocalAssetStorage(path.join(tempDir, 'outputs')),
+    joinUrl,
+    publicAsset: (asset) => asset,
+    proxyRequest: async (url, options) => {
+      calls.push({ method: options.method, url });
+      if (options.method === 'GET') {
+        return { status: 200, data: { output: { task_id: 'dash-task-1', task_status: 'RUNNING' } } };
+      }
+      // 百炼真实提交响应：request_id 与 output.task_id 同时存在
+      return {
+        status: 200,
+        data: {
+          request_id: 'dash-request-id-not-a-task',
+          output: { task_id: 'dash-task-1', task_status: 'PENDING' },
+        },
+      };
+    },
+    resolveApiCredentials: async () => ({
+      adapterId: 'dashscope-video',
+      apiKey: 'bailian-key',
+      baseUrl: 'https://dashscope.aliyuncs.com',
+      model: 'wan2.7-t2v',
+      platformModelId: 'pm-bailian',
+      providerId: 'aliyun-bailian',
+    }),
+  });
+
+  const created = await service.generateVideo({
+    req: { headers: { host: 'workbench.example' }, protocol: 'https' },
+    userId: user.id,
+    body: {
+      platformModelId: 'pm-bailian',
+      providerId: 'aliyun-bailian',
+      model: 'wan2.7-t2v',
+      mode: 'text-to-video',
+      prompt: '一只橘猫',
+      duration: 2,
+      resolution: '720P',
+      aspectRatio: '16:9',
+    },
+    secrets: {},
+  });
+
+  assert.equal(created.status, 202);
+  const taskId = created.data.taskId;
+
+  // 坑 1：存下来的必须是任务号，不是请求编号
+  const stored = getTask(taskId);
+  assert.equal(stored.output.upstream.taskId, 'dash-task-1');
+  assert.equal(
+    stored.output.upstream.taskId.includes('request-id'),
+    false,
+    '不能把 request_id 当成上游任务号'
+  );
+  // adapterId 必须存下来，查询阶段要靠它选路径
+  assert.equal(stored.output.credential.adapterId, 'dashscope-video');
+  // 提交必须走百炼的合成路径
+  assert.match(calls[0].url, /\/api\/v1\/services\/aigc\/video-generation\/video-synthesis$/);
+
+  const queried = await service.getVideoTask({ taskId, userId: user.id, query: {}, secrets: {} });
+  assert.ok(
+    calls.length >= 2,
+    `查询应当向上游发一次请求，实际只发了 ${calls.length} 次（返回状态 ${queried.status}）`
+  );
+
+  // 坑 2：查询必须复用提交时存下的 adapterId，走同一条协议路径
+  const queryUrl = calls[1].url;
+  assert.match(queryUrl, /\/api\/v1\/tasks\/dash-task-1$/, `查询路径错误: ${queryUrl}`);
+  assert.equal(
+    queryUrl.includes('/api/v3/contents/generations/tasks/'),
+    false,
+    '不能拿火山方舟的路径去查百炼任务'
+  );
+});
+
+test('火山方舟视频任务仍然走自己的路径（修复不能破坏原路径）', async () => {
+  const user = createUser({
+    email: 'video-ark@example.com',
+    username: 'video-ark@example.com',
+    name: 'Ark Video',
+    passwordHash: 'test',
+  });
+  const calls = [];
+  const service = createVideoGenerationService({
+    assetStorage: new LocalAssetStorage(path.join(tempDir, 'outputs')),
+    joinUrl,
+    publicAsset: (asset) => asset,
+    proxyRequest: async (url, options) => {
+      calls.push({ method: options.method, url });
+      if (options.method === 'GET') {
+        return { status: 200, data: { id: 'ark-task-1', status: 'RUNNING' } };
+      }
+      return { status: 200, data: { id: 'ark-task-1', status: 'queued' } };
+    },
+    resolveApiCredentials: async () => ({
+      adapterId: 'seedance-video',
+      apiKey: 'ark-key',
+      baseUrl: 'https://ark.cn-beijing.volces.com',
+      model: 'doubao-seedance-2-0-mini-260615',
+      providerId: 'seedance',
+    }),
+  });
+
+  const created = await service.generateVideo({
+    req: { headers: { host: 'workbench.example' }, protocol: 'https' },
+    userId: user.id,
+    body: {
+      providerId: 'seedance',
+      model: 'doubao-seedance-2-0-mini-260615',
+      prompt: 'make a short video',
+      duration: 5,
+    },
+    secrets: {},
+  });
+
+  const taskId = created.data.taskId;
+  assert.equal(getTask(taskId).output.upstream.taskId, 'ark-task-1');
+  assert.match(calls[0].url, /\/api\/v3\/contents\/generations\/tasks$/);
+
+  await service.getVideoTask({ taskId, userId: user.id, query: {}, secrets: {} });
+  assert.match(calls[1].url, /\/api\/v3\/contents\/generations\/tasks\/ark-task-1$/);
+});
+
+test('查询必须复用存下的 adapterId，而不是只靠 providerId 重新推断', async () => {
+  // 精确命中 getVideoTask 里的适配器解析。
+  // 直接构造一条"提交已完成"的任务：凭据里 providerId 与 adapterId 并存，
+  // 而 adapterId 才是提交时真正用过的那个。查询若忽略它，就会拿另一套协议去问上游。
+  const user = createUser({
+    email: 'video-adapter-reuse@example.com',
+    username: 'video-adapter-reuse@example.com',
+    name: 'Adapter Reuse',
+    passwordHash: 'test',
+  });
+  const calls = [];
+  const service = createVideoGenerationService({
+    assetStorage: new LocalAssetStorage(path.join(tempDir, 'outputs')),
+    joinUrl,
+    publicAsset: (asset) => asset,
+    proxyRequest: async (url, options) => {
+      calls.push({ method: options.method, url });
+      return { status: 200, data: { output: { task_id: 'mixed-task', task_status: 'RUNNING' } } };
+    },
+    resolveApiCredentials: async () => ({
+      adapterId: 'dashscope-video',
+      apiKey: 'bailian-key',
+      baseUrl: 'https://dashscope.aliyuncs.com',
+      platformModelId: 'pm-mixed',
+      providerId: 'seedance',
+    }),
+  });
+
+  const task = service.createVideoTask(user.id, {
+    providerId: 'seedance',
+    model: 'wan2.7-t2v',
+    prompt: '一只橘猫',
+    duration: 2,
+  }, 'running');
+
+  // 提交已完成：adapterId 是提交时真正用过的那个（百炼）
+  updateTask(task.id, {
+    status: 'running',
+    output: {
+      providerId: 'seedance',
+      credential: { adapterId: 'dashscope-video', platformModelId: 'pm-mixed' },
+      upstream: { taskId: 'mixed-task', status: 'PENDING' },
+    },
+  });
+
+  await service.getVideoTask({ taskId: task.id, userId: user.id, query: {}, secrets: {} });
+
+  assert.ok(calls.length >= 1, `查询应当发请求，实际 ${calls.length} 次`);
+  const queryUrl = calls[0].url;
+  assert.match(
+    queryUrl,
+    /\/api\/v1\/tasks\/mixed-task$/,
+    `查询必须复用存下的 adapterId；只按 providerId 推断会走到另一套协议。实际 URL: ${queryUrl}`
+  );
+});
+
 test('video task finalization enforces user asset storage quota before saving generated video', async () => {
   const originalFetch = global.fetch;
   let savedCount = 0;

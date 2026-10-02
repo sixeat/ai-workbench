@@ -375,6 +375,13 @@ export interface ProxyProviderTemplate {
   defaultModels?: string[];
 }
 
+// 后端 GET /api/providers 返回 { providers, count }。
+// 补上列表包装类型：之前只声明了元素类型，调用方拿不到 count。
+export interface ProxyProviderListResponse {
+  providers: ProxyProviderTemplate[];
+  count: number;
+}
+
 export interface ProxyModelCapabilities {
   id: string;
   providerId: string;

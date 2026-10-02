@@ -221,6 +221,170 @@ test('platform capability validation happens before credit debit', () => {
   assert.equal(creditRepository.getAccount(user.id).balance, 100);
 });
 
+test('按模型分档定价：视频模型用视频单价，图片模型用图片单价', () => {
+  // 上游成本差几个数量级（文本 ¥0.005 / 图片 ¥0.4 / 视频 ¥3 起），
+  // 所以单价必须挂在具体模型上，而不是全局一刀切。
+  const user = testUser('credit-tiered@example.com');
+  creditRepository.adjustAccount({ amount: 2000, userId: user.id });
+
+  // 百炼文生视频：wan*-t2v* preset 声明 75 积分/秒
+  const video = createBillableTask(user, 'video', {
+    duration: 5,
+    model: 'wan2.7-t2v',
+    prompt: 'cat',
+    providerId: 'aliyun-bailian',
+  });
+  assert.equal(video.creditCost, 375, '5 秒视频应为 75×5 = 375');
+  assert.equal(video.creditKeyScope, 'server_key');
+  assert.equal(video.creditStatus, 'charged');
+  assert.equal(video.input.billing.unit, 75, '单价应来自模型分档而非全局默认');
+  assert.equal(video.input.billing.quantity, 5);
+
+  // 百炼图片：wan2.7-image* preset 声明 10 积分/张
+  const image = createBillableTask(user, 'image', {
+    model: 'wan2.7-image',
+    n: 2,
+    prompt: 'cat',
+    providerId: 'aliyun-bailian',
+  });
+  assert.equal(image.creditCost, 20, '2 张图片应为 10×2 = 20');
+
+  // 图片 Pro 是更高档位：30 积分/张
+  const pro = createBillableTask(user, 'image', {
+    model: 'wan2.7-image-pro',
+    n: 1,
+    prompt: 'cat',
+    providerId: 'aliyun-bailian',
+  });
+  assert.equal(pro.creditCost, 30, 'Pro 图片应为 30');
+
+  assert.equal(creditRepository.getAccount(user.id).balance, 2000 - 375 - 20 - 30);
+});
+
+test('未匹配任何 preset 的模型回退到全局默认单价', () => {
+  const user = testUser('credit-fallback@example.com');
+  creditRepository.adjustAccount({ amount: 500, userId: user.id });
+
+  // 自定义模型名不匹配任何 preset，应走全局默认（视频 20/秒、图片 10/张）
+  const video = createBillableTask(user, 'video', {
+    duration: 5,
+    model: 'my-custom-video',
+    prompt: 'x',
+    providerId: 'openai-compatible',
+  });
+  assert.equal(video.creditCost, 100, '未匹配模型应回退到 20×5 = 100');
+
+  const image = createBillableTask(user, 'image', {
+    model: 'my-custom-image',
+    n: 1,
+    prompt: 'x',
+    providerId: 'openai-compatible',
+  });
+  assert.equal(image.creditCost, 10, '未匹配模型应回退到 10');
+});
+
+test('平台模型可以在能力表里覆盖单价（运营调价不必改代码）', () => {
+  const user = testUser('credit-platform-price@example.com');
+  creditRepository.adjustAccount({ amount: 1000, userId: user.id });
+
+  const key = upsertApiKey({
+    baseUrl: 'https://api.example.com',
+    encryptedKey: 'fake-encrypted-key',
+    keyScope: 'server',
+    name: 'Server video key',
+    ownerUserId: user.id,
+    providerId: 'aliyun-bailian',
+  });
+  const apiKeyModel = upsertApiKeyModel({
+    apiKeyId: key.id,
+    upstreamModel: 'wan2.7-t2v',
+    modelProviderId: 'aliyun-bailian',
+    adapterId: 'dashscope-video',
+    displayName: 'Wan 2.7 T2V',
+    capabilities: { videoGeneration: true },
+    capabilitySource: 'matched-rules',
+    discoveryStatus: 'active',
+    isEnabled: true,
+  });
+  const platformModel = upsertPlatformModel({
+    displayName: '特价视频',
+    capability: 'videoGeneration',
+    model: 'wan2.7-t2v',
+    // 运营覆盖价：把视频降到 40 积分/秒
+    capabilities: { creditCost: { videoPerSecond: 40 }, videoGeneration: true },
+    isEnabled: true,
+  });
+  upsertPlatformModelRoute({
+    platformModelId: platformModel.id,
+    apiKeyId: key.id,
+    apiKeyModelId: apiKeyModel.id,
+    providerId: 'aliyun-bailian',
+    upstreamModel: 'wan2.7-t2v',
+    isEnabled: true,
+  });
+
+  const task = createBillableTask(user, 'video', {
+    duration: 5,
+    platformModelId: platformModel.id,
+    prompt: 'cat',
+  });
+
+  assert.equal(task.creditCost, 200, '平台覆盖价应当生效：40×5 = 200，而不是 75×5');
+  // 覆盖价里没写到的字段仍走全局默认
+  assert.equal(task.input.billing.quantity, 5);
+  assert.equal(task.input.billing.unit, 40);
+});
+
+test('显式声明 0 积分表示免费，不会被当成缺失', () => {
+  const user = testUser('credit-free-tier@example.com');
+  creditRepository.adjustAccount({ amount: 100, userId: user.id });
+
+  const key = upsertApiKey({
+    baseUrl: 'https://api.example.com',
+    encryptedKey: 'fake-encrypted-key',
+    keyScope: 'server',
+    name: 'Free image key',
+    ownerUserId: user.id,
+    providerId: 'openai-compatible',
+  });
+  const apiKeyModel = upsertApiKeyModel({
+    apiKeyId: key.id,
+    upstreamModel: 'gpt-image-2',
+    modelProviderId: 'openai-compatible',
+    adapterId: 'openai-image',
+    displayName: 'Free Image',
+    capabilities: { imageGeneration: true },
+    capabilitySource: 'matched-rules',
+    discoveryStatus: 'active',
+    isEnabled: true,
+  });
+  const platformModel = upsertPlatformModel({
+    displayName: '免费图片',
+    capability: 'imageGeneration',
+    model: 'gpt-image-2',
+    capabilities: { creditCost: { imagePerItem: 0 }, imageGeneration: true },
+    isEnabled: true,
+  });
+  upsertPlatformModelRoute({
+    platformModelId: platformModel.id,
+    apiKeyId: key.id,
+    apiKeyModelId: apiKeyModel.id,
+    providerId: 'openai-compatible',
+    upstreamModel: 'gpt-image-2',
+    isEnabled: true,
+  });
+
+  const task = createBillableTask(user, 'image', {
+    n: 3,
+    platformModelId: platformModel.id,
+    prompt: 'free',
+  });
+
+  assert.equal(task.creditCost, 0, '0 是合法的免费定价，不是"未配置"');
+  assert.equal(task.creditStatus, 'free');
+  assert.equal(creditRepository.getAccount(user.id).balance, 100, '免费不应扣积分');
+});
+
 test('refund restores charged credits only once', () => {
   const user = testUser('credit-refund@example.com');
   creditRepository.adjustAccount({ amount: 20, userId: user.id });
