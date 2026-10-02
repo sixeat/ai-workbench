@@ -1,13 +1,18 @@
-// API 契约一致性检查。
+// API 契约一致性检查（本文件是契约的**真源之一**）。
 //
-// 目的：`src/lib/apiProxy.ts` 里的 Proxy* 接口是前端手写的响应结构描述，后端是纯 .cjs 没有类型。
-// 两边靠人工同步，一旦后端改了字段名或类型，tsc / lint / 现有测试都不会报错。
+// 目的：本文件里的 ENDPOINT_CONTRACT / ELEMENT_CONTRACT / UNDECLARED_FIELD_CONTRACT
+// 三张表，声明了各端点「必须返回哪些字段、什么类型」。
+// 它真实启动一次后端、逐个端点取响应、做「键名 + 类型」核对——
+// 后端一旦改了字段名或类型，这里会立刻失败。
 //
-// 这个脚本真实启动一次后端，逐个端点取响应，和 Proxy* 接口声明的必需字段做「键名 + 类型」核对。
-// 发现不一致就失败，把 dev 期就能发现的问题拦在 CI 里。
+// 双向核对：
+//   · 正向：表里声明为必需的字段，响应里必须存在且类型相符
+//   · 反向：白名单里的端点，不允许出现表外的顶层字段（漂移的早期信号）
 //
-// 结构沿用 appSplitDeployment.test.cjs：环境变量必须在 require 之前设置（db.cjs 是单例），
-// 并且不删除临时目录 —— SQLite 句柄在进程结束前不会释放。
+// 消费方是前端 `../frontend/src/lib/api.js`（以及对契约的所有读者）。
+// 后端改返回、或前端新增对某字段的依赖时，同步更新本文件的表。
+//
+// 结构沿用 appSplitDeployment.test.cjs：环境变量必须在 require 之前设置（db.cjs 是单例）。
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
@@ -26,11 +31,19 @@ process.env.WORKBENCH_SERVE_STATIC = 'false';
 process.env.WORKBENCH_START_WORKERS = 'false';
 
 const { createWorkbenchApp } = require('./app.cjs');
+const { db } = require('./db.cjs');
+
+// 先关库再删目录：SQLite 句柄不释放则 Windows 删不掉。
+// 不加这个钩子会每跑一次留一个临时目录（曾累积 52 个）。
+test.after(() => {
+  try { db.close(); } catch { /* 已关闭 */ }
+  fs.rmSync(tempDir, { force: true, recursive: true });
+});
 
 const J = (...kinds) => ({ kinds });
 
-// 与 src/lib/apiProxy.ts 的 Proxy* 接口对应的必需字段表。
-// 「必需」= 接口里声明为非可选的字段；带 ? 的可选字段不在此校验。
+// 与契约表对应的必需字段。
+// 「必需」= 前端确实依赖的字段。带 ? 的可选字段不在此校验。
 const ENDPOINT_CONTRACT = {
   'GET /api/health': {
     status: J('string'),
@@ -77,7 +90,7 @@ const ENDPOINT_CONTRACT = {
   },
 };
 
-// 集合端点里元素的必需字段（对应 Proxy* 元素接口）
+// 集合端点里元素的必需字段。
 const ELEMENT_CONTRACT = {
   'GET /api/tasks': {
     field: 'tasks',
@@ -132,7 +145,6 @@ const ADMIN_ROUTES = new Set(['GET /api/admin/health']);
 const CONTRACT_ADMIN_TOKEN = 'contract-check-admin-token';
 
 // 反向检查用的白名单：这些端点只允许出现这里列出的顶层字段。
-// 对应 src/lib/apiProxy.ts 里各 Proxy* 接口声明的顶层键。
 const UNDECLARED_FIELD_CONTRACT = {
   'GET /api/model-catalog': ['personalModels', 'platformModels', 'count'],
   'GET /api/credits/me': ['account'],
@@ -174,7 +186,7 @@ async function closeServer(server) {
   await new Promise((resolve) => server.close(resolve));
 }
 
-test('API 响应形状与前端 Proxy* 契约一致', async () => {
+test('API 响应形状与契约表一致', async () => {
   const runtime = createWorkbenchApp({
     env: {
       ...process.env,
@@ -231,7 +243,7 @@ test('API 响应形状与前端 Proxy* 契约一致', async () => {
       problems,
       [],
       `发现 ${problems.length} 处契约不一致：\n  - ${problems.join('\n  - ')}\n\n` +
-      '处理方式：要么改后端返回，要么同步更新 src/lib/apiProxy.ts 的 Proxy* 接口。'
+      '处理方式：要么改后端返回，要么同步更新本文件的契约表（以及前端 api.js 的消费代码）。'
     );
   } finally {
     await closeServer(server);
