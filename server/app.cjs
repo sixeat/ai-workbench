@@ -337,7 +337,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
   apiGateway.registerAfterRoutes(app);
 
   if (serveStatic) {
-    // 旧前端（内嵌在 api/src）已移除，api/dist 可能不存在。
+    // 旧前端（原先内嵌在 backend/src）已移除，backend/dist 可能不存在。
     // 直接把不存在的目录交给 express.static 会让所有页面请求走进
     // sendFile 的兜底并报 ENOENT，错误信息指向一个不存在的文件，
     // 排查成本很高。这里显式判断，给出可操作的提示。
@@ -350,8 +350,8 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
       app.get(/^(?!\/api).*/, (req, res) => {
         res.status(404).json({
           error:
-            'No frontend is bundled with this backend. Build the frontend in ../web and serve it '
-            + 'separately, or copy its build output into api/dist to let this service host it. '
+            'No frontend is bundled with this backend. Build the frontend in ../frontend and serve it '
+            + 'separately, or copy its build output into backend/dist to let this service host it. '
             + 'Set WORKBENCH_SERVE_STATIC=false to silence this route.',
         });
       });

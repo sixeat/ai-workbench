@@ -1,9 +1,9 @@
 {
-  "name": "ai-workbench-api",
+  "name": "ai-workbench-backend",
   "private": true,
   "version": "0.3.0",
   "type": "module",
-  "description": "节点工作流平台后端。前端在 ../web（独立仓库）。",
+  "description": "节点工作流平台后端。前端在 ../frontend（独立仓库）。",
   "scripts": {
     "check:deploy": "node server/deploymentCheck.cjs",
     "check:mojibake": "node scripts/checkMojibake.cjs",

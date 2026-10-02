@@ -111,7 +111,7 @@ flowchart LR
 
 ## 常用命令
 
-本项目是**纯后端**。前端在 `../web`（独立仓库），有自己的构建流程。
+本项目是**纯后端**。前端在 `../frontend`（独立仓库），有自己的构建流程。
 
 启动：
 
@@ -127,7 +127,7 @@ npm test             # 594 测试
 npm run lint         # 期望 0 警告
 npm run check:mojibake
 npm run check:deploy
-node ../scripts/checkRegistrySync.cjs ../web   # 前端注册表副本是否同步
+node ../scripts/checkRegistrySync.cjs ../frontend   # 前端注册表副本是否同步
 ```
 
 服务器后台运行：

@@ -1,16 +1,19 @@
 # 前端对接清单（后端 → 前端）
 
-> 面向对象：负责 `web/` 前端的 AI / 开发者。
+> 面向对象：负责 `frontend/` 前端的 AI / 开发者。
 > 后端已完成并验证。本清单说明**前端需要配合的改动**，按优先级排列。
 >
-> 项目结构：`F:\work\ai-workbench\` 下有 `api\`（后端）与 `web\`（前端）。
+> 项目结构：`F:\work\ai-workbench\` 下有 `backend\`（后端）与 `frontend\`（前端）。
 > 下文路径均相对于项目根目录。
 >
-> 核对基准：后端 **740 测试 / 739 通过**，契约验证 **21/21 通过**。
+> 核对基准：后端 **594 测试 / 593 通过**，契约验证 **21/21 通过**。
 >
 > **进度更新（2026-10-02）**：下述两项 P0 已完成 ——
-> 视频轮询超时已提到 30 分钟（`web/src/lib/runner.js` 的 `callVideo`），
+> 视频轮询超时已提到 30 分钟（`frontend/src/lib/runner.js` 的 `callVideo`），
 > 注册表副本已同步（双侧哈希一致）。
+>
+> 另：后端内嵌的旧前端（原 `backend/src/`，含 30 个测试）已移除，由 `frontend/` 取代。
+> 因此后端测试数由 740 降为 594。
 
 ---
 
@@ -123,7 +126,7 @@ export async function pollTask(taskId, { intervalMs = 2000, timeoutMs = 10 * 60 
 
 ### 现象（当时）
 
-`web/src/data/node-registry.json` 是后端 `api/docs/node-registry.json` 的副本。
+`frontend/src/data/node-registry.json` 是后端 `backend/docs/node-registry.json` 的副本。
 后端加了定价段后，副本一度过期：
 
 ```
@@ -142,7 +145,7 @@ copy "api\docs\node-registry.json" "web\src\data\node-registry.json"
 或直接在项目根目录跑校验（会给出准确的复制命令）：
 
 ```
-node api\scripts\checkRegistrySync.cjs web
+node backend\scripts\checkRegistrySync.cjs frontend
 ```
 
 ### 安全性
@@ -367,14 +370,14 @@ grep -n "pollTask(" src/lib/runner.js
 在项目根目录 `F:\work\ai-workbench\` 下执行：
 
 ```bash
-node api/scripts/checkRegistrySync.cjs web
+node backend/scripts/checkRegistrySync.cjs frontend
 ```
 
 输出 `一致` 即通过；输出 `过期` 会给出准确的复制命令。
 
 ### 3) 确认节点类型没被改动
 
-在 `web/` 目录下执行：
+在 `frontend/` 目录下执行：
 
 ```bash
 node -e "const r=require('./src/data/node-registry.json');console.log(r.summary.nodeTypeCount, Object.keys(r.summary.categories).join(','), r.creditPricing.presets.length)"
