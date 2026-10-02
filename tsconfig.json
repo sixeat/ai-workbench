@@ -1,0 +1,30 @@
+{
+  // 本文件只覆盖 src/ 下两个 TypeScript 源头文件：
+  //   src/data/nodeRegistry.ts  22 个节点定义的源头
+  //   src/types/nodes.ts        端口值与工作流类型
+  // server/ 是 CommonJS（.cjs），由 oxlint 检查，不在这里编译。
+  //
+  // 为什么需要它：scripts/exportNodeRegistry.mjs 走 tsx 运行，tsx 只剥离类型、不校验类型，
+  // 所以这两个文件的类型错误过去不会被任何检查发现。`npm run check:types` 补上这一环。
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": [],
+
+    // tsx 逐文件剥离类型：这两项强制「只导入类型」必须显式写 import type，
+    // 否则运行时会去导入一个不存在的值。
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*.ts"]
+}
