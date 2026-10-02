@@ -105,7 +105,7 @@ flowchart LR
 | [前端静态托管](docs/frontend-static-hosting.md) | Nginx、Vercel、OSS/CDN 托管前端 |
 | [API 设计](docs/api-design-v2.md) | 后端 API 和数据结构设计 |
 | [工作流执行语义](docs/workflow-execution-semantics.md) | 端口值类型、连线推断、22 种节点契约、执行顺序、指纹复用与校验规则 |
-| [API 契约](docs/api-contract.md) | 88 个路由清单、全局响应约定、鉴权模型与自动化契约检查说明 |
+| [API 契约](docs/api-contract.md) | 94 个路由清单、全局响应约定、鉴权模型与自动化契约检查说明 |
 | [节点清单（JSON）](docs/node-registry.json) | 机器可读的 22 种节点定义：端口、配色、配置字段、connection 规则。重写前端时作为陈设依据，`npm run export:node-registry` 重新生成 |
 | [流水线与 SaaS 落地方案](docs/pipeline-saas-roadmap.md) | 服务端工作流编排、积分定价、运维兜底、商业化与扩容的分阶段方案 |
 
@@ -125,9 +125,11 @@ npm run start:server # 先跑部署检查再启动
 ```bash
 npm test             # 594 测试
 npm run lint         # 期望 0 警告
+npm run check:types  # src/ 下节点注册表源头的类型检查（tsc -b）
+npm run check:routes # docs/api-contract.md 路由清单与后端实际注册是否一致
 npm run check:mojibake
 npm run check:deploy
-node ../scripts/checkRegistrySync.cjs ../frontend   # 前端注册表副本是否同步
+node scripts/checkRegistrySync.cjs ../frontend   # 前端注册表副本是否同步
 ```
 
 服务器后台运行：

@@ -400,6 +400,6 @@ node server/apiContract.test.cjs        # 双向字段校验
 
 | 文档 | 内容 |
 | --- | --- |
-| `docs/api-contract.md` | 全部 88+6 个端点、计费模型、服务端运行章节 |
+| `docs/api-contract.md` | 全部 94 个路由、计费模型、服务端运行章节 |
 | `docs/node-registry.json` | 节点清单 + 端口 + 配置字段 + 定价档位 |
 | `docs/workflow-execution-semantics.md` | 执行语义：端口信封、哨兵、推断规则、指纹 |

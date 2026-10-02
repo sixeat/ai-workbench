@@ -1,6 +1,6 @@
 # API 契约
 
-结论：后端提供 **88 个 REST 路由**，全部挂在未版本化的 `/api/*` 下。这份文档固定全局约定、给出完整路由清单，并说明**哪些端点的响应形状已经被自动化验证过**。
+结论：后端提供 **94 个 REST 路由**（默认注册 89 条，另 5 条需显式开开关），全部挂在未版本化的 `/api/*` 下。这份文档固定全局约定、给出完整路由清单，并说明**哪些端点的响应形状已经被自动化验证过**。
 
 **为什么需要它**：接口契约过去只写在旧前端的 `src/lib/apiProxy.ts`（60+ 个手写 `Proxy*` 接口）里。前端一重写，这份描述就没了，新实现只能读 `.cjs` 源码反推。本文档 + `server/apiContract.test.cjs` 把契约从旧前端里**剥离出来并变成可执行的**。
 
@@ -50,7 +50,7 @@
 | `GET /api/model-capability-presets` | `{presets}` |
 | `GET /api/asset-collections` | `{collections, count}` |
 
-**注意覆盖范围有限**：88 个路由里只验证了 13 个（读端点）。**写端点（POST / PATCH / PUT）的响应形状尚未纳入自动检查**——这是当前最大的契约盲区。
+**注意覆盖范围有限**：94 个路由里只验证了 13 个（读端点）。**写端点（POST / PATCH / PUT）的响应形状尚未纳入自动检查**——这是当前最大的契约盲区。
 
 ### 1.2 如何扩充
 
@@ -97,7 +97,14 @@ UNDECLARED_FIELD_CONTRACT['GET /api/tasks/:taskId'] = ['task'];
 
 ---
 
-## 三、完整路由清单（88 个）
+## 三、完整路由清单（94 个）
+
+> 其中 5 条**默认不注册**，需显式开开关（且只在 local 模式生效）：
+> `POST /api/{chat,claude,images,videos}/sync` 需 `WORKBENCH_ENABLE_SYNC_GENERATION=true`；
+> `POST /api/assets/:assetId/open-location` 需 `WORKBENCH_ENABLE_OPEN_LOCATION=true`。
+> 默认注册 89 条，开关全开 94 条。这份清单有自动核对：`npm run check:routes` 会启动一次
+> 后端、遍历 Express 路由栈，与本文表格**双向比对**，漏记或写错都以 exit 1 报出来。
+> 改路由后请跑它，别只改标题。
 
 ### 3.1 认证与账号（18）
 
@@ -294,7 +301,7 @@ POST /api/workflow-runs
 > 前端若走此路径，就**不需要**自己轮询 `GET /api/tasks/:id`——运行状态由服务端维护。
 > 若仍走逐任务轮询，注意视频的超时至少要给到 **30 分钟**。
 
-### 3.8 健康检查（2）
+### 3.9 健康检查（2）
 
 | 方法 | 路径 | 暴露范围 |
 | --- | --- | --- |

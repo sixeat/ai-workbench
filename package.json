@@ -8,6 +8,7 @@
     "check:deploy": "node server/deploymentCheck.cjs",
     "check:mojibake": "node scripts/checkMojibake.cjs",
     "check:registry-sync": "node scripts/checkRegistrySync.cjs",
+    "check:routes": "node scripts/checkApiRouteInventory.cjs",
     "check:types": "tsc -b",
     "export:node-registry": "node --import tsx scripts/exportNodeRegistry.mjs",
     "lint": "oxlint",
