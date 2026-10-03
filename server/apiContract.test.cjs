@@ -250,3 +250,227 @@ test('API 响应形状与契约表一致', async () => {
     await runtime.stop();
   }
 });
+
+// 写端点契约：工作流运行全生命周期。
+//
+// 上面三张表只覆盖读端点。写端点过去完全没有自动检查——api-contract.md 里
+// 点名的最大契约盲区，也正是前端「保存工作流 / 提交运行」链路最容易被打断的地方
+// （§3.8 就曾把 POST 的响应写成 {run, nodes}，实际是 {created, run}）。
+// 契约细节见 docs/workflow-run-api.md。
+//
+// startWorkers:false 时不启动运行推进 worker，所以运行会停在 queued、节点停在
+// pending，状态是确定的，不依赖时间。
+const RUN_CONTRACT = {
+  id: J('string'),
+  workflowId: J('string'),
+  workflowVersionId: J('string', 'null'),
+  userId: J('string'),
+  status: J('string'),
+  trigger: J('string'),
+  idempotencyKey: J('string', 'null'),
+  graphHash: J('string'),
+  definition: J('object'),
+  output: J('object', 'null'),
+  error: J('object', 'null'),
+  creditCost: J('number'),
+  creditStatus: J('string'),
+  reservedCredits: J('number'),
+  totalNodes: J('number'),
+  finishedNodes: J('number'),
+  createdAt: J('string'),
+  updatedAt: J('string'),
+};
+
+const RUN_NODE_CONTRACT = {
+  id: J('string'),
+  runId: J('string'),
+  nodeId: J('string'),
+  nodeType: J('string'),
+  status: J('string'),
+  taskId: J('string', 'null'),
+  attempt: J('number'),
+  inputHash: J('string'),
+  output: J('object', 'null'),
+  error: J('object', 'null'),
+  durationMs: J('number', 'null'),
+  startedAt: J('string', 'null'),
+  finishedAt: J('string', 'null'),
+  createdAt: J('string'),
+  updatedAt: J('string'),
+};
+
+const RUN_PLAN_CONTRACT = {
+  blocked: J('array'),
+  hasPendingWork: J('boolean'),
+  ready: J('array'),
+  runnable: J('array'),
+  waiting: J('array'),
+};
+
+test('工作流运行写端点响应形状与生命周期契约一致', async () => {
+  const runtime = createWorkbenchApp({
+    env: {
+      ...process.env,
+      PROXY_HOST: '127.0.0.1',
+      WORKBENCH_REQUIRE_LOGIN: 'false',
+      WORKBENCH_ALLOW_PUBLIC_SERVER: 'true',
+      WORKBENCH_START_WORKERS: 'false',
+      WORKBENCH_SERVE_STATIC: 'false',
+      WORKBENCH_ADMIN_TOKEN: CONTRACT_ADMIN_TOKEN,
+    },
+    startWorkers: false,
+  });
+  const { server, baseUrl } = await listen(runtime.app);
+  const problems = [];
+
+  async function call(method, pathname, body) {
+    const hasBody = body !== undefined;
+    const response = await fetch(`${baseUrl}${pathname}`, {
+      method,
+      headers: hasBody ? { 'content-type': 'application/json' } : {},
+      body: hasBody ? JSON.stringify(body) : undefined,
+    });
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    return { body: payload, status: response.status };
+  }
+
+  function expectStatus(actual, expected) {
+    assert.equal(actual.status, expected.status, `${expected.label} 期望 ${expected.status}，实际 ${actual.status}`);
+  }
+
+  function expectTopLevelKeys(actual, keys, label) {
+    assert.deepEqual(
+      Object.keys(actual.body || {}).sort(),
+      [...keys].sort(),
+      `${label} 的顶层字段应恰好是 ${keys.join(' + ')}，实际 ${JSON.stringify(Object.keys(actual.body || {}))}`
+    );
+  }
+
+  try {
+    // 1. 先建一张最小工作流：运行必须挂在已存在的工作流上。
+    const createdWorkflow = await call('POST', '/api/workflows', {
+      edges: [],
+      name: '契约检查用工作流',
+      nodes: [{
+        data: { config: { content: 'hello' }, label: '文本输入', type: 'textInput' },
+        id: 'contract-text',
+        position: { x: 0, y: 0 },
+        type: 'textInput',
+      }],
+    });
+    expectStatus(createdWorkflow, { label: 'POST /api/workflows', status: 201 });
+    expectTopLevelKeys(createdWorkflow, ['workflow'], 'POST /api/workflows');
+    const workflowId = createdWorkflow.body?.workflow?.id;
+    assert.equal(typeof workflowId, 'string', 'POST /api/workflows 未返回 workflow.id');
+
+    const idempotencyKey = `contract-key-${Date.now()}`;
+
+    // 2. 首次提交运行 → 201 + {created:true, run}
+    const first = await call('POST', '/api/workflow-runs', { idempotencyKey, workflowId });
+    expectStatus(first, { label: '首次 POST /api/workflow-runs', status: 201 });
+    expectTopLevelKeys(first, ['created', 'run'], 'POST /api/workflow-runs');
+    assert.equal(first.body.created, true, '首次提交的 created 应为 true');
+    checkShape(first.body.run, RUN_CONTRACT, 'POST /api/workflow-runs → run', problems);
+    const runId = first.body?.run?.id;
+    assert.equal(typeof runId, 'string', 'POST /api/workflow-runs 未返回 run.id');
+    assert.equal(first.body.run.status, 'queued', '新建运行的状态应为 queued');
+    assert.equal(first.body.run.trigger, 'api', '本组路由提交的运行 trigger 应为 api');
+    assert.equal(first.body.run.totalNodes, 1, '快照应记录 1 个节点');
+    assert.equal(first.body.run.idempotencyKey, idempotencyKey, '运行应记住幂等键');
+
+    // 3. 同键重复提交 → 200 + created:false，且是同一个运行
+    const second = await call('POST', '/api/workflow-runs', { idempotencyKey, workflowId });
+    expectStatus(second, { label: '幂等重复 POST /api/workflow-runs', status: 200 });
+    expectTopLevelKeys(second, ['created', 'run'], '幂等重复 POST /api/workflow-runs');
+    assert.equal(second.body.created, false, '幂等命中的 created 应为 false');
+    assert.equal(second.body.run.id, runId, '幂等命中应返回同一个运行，而不是新建');
+
+    // 4. 详情 → {run, nodes}
+    const detail = await call('GET', `/api/workflow-runs/${runId}`);
+    expectStatus(detail, { label: 'GET /api/workflow-runs/:runId', status: 200 });
+    expectTopLevelKeys(detail, ['nodes', 'run'], 'GET /api/workflow-runs/:runId');
+    checkShape(detail.body.run, RUN_CONTRACT, 'GET 运行详情 → run', problems);
+    assert.equal(Array.isArray(detail.body.nodes) && detail.body.nodes.length, 1, '详情应带 1 个运行节点');
+    checkShape(detail.body.nodes[0], RUN_NODE_CONTRACT, 'GET 运行详情 → nodes[0]', problems);
+    assert.equal(detail.body.nodes[0].nodeId, 'contract-text', '节点应回指工作流图里的节点 id');
+    assert.equal(detail.body.nodes[0].status, 'pending', '未推进的运行节点应停在 pending');
+    assert.equal(detail.body.nodes[0].attempt, 0, '从未入队的节点 attempt 应为 0');
+
+    // 5. 计划 → {plan, runId, status}，plan 里装节点 id 字符串
+    const plan = await call('GET', `/api/workflow-runs/${runId}/plan`);
+    expectStatus(plan, { label: 'GET /api/workflow-runs/:runId/plan', status: 200 });
+    expectTopLevelKeys(plan, ['plan', 'runId', 'status'], 'GET /api/workflow-runs/:runId/plan');
+    checkShape(plan.body.plan, RUN_PLAN_CONTRACT, '运行计划 → plan', problems);
+    assert.ok(
+      plan.body.plan.runnable.includes('contract-text'),
+      'textInput 是本地节点，应出现在 plan.runnable 里'
+    );
+
+    // 6. 列表 → {runs, count, total, limit, offset}
+    const list = await call('GET', '/api/workflow-runs?limit=10');
+    expectStatus(list, { label: 'GET /api/workflow-runs', status: 200 });
+    expectTopLevelKeys(list, ['runs', 'count', 'total', 'limit', 'offset'], 'GET /api/workflow-runs');
+    assert.equal(list.body.count, list.body.runs.length, 'count 应是本页条数');
+    assert.ok(list.body.total >= 1, 'total 应是匹配总数');
+
+    // 7. 运行还在进行中时重试 → 409（本组接口唯一的 409）
+    const retryWhileRunning = await call('POST', `/api/workflow-runs/${runId}/retry`);
+    expectStatus(retryWhileRunning, { label: '进行中 retry', status: 409 });
+    expectTopLevelKeys(retryWhileRunning, ['error'], '进行中 retry');
+    assert.match(String(retryWhileRunning.body.error), /still in progress/i, '409 应说明原因');
+
+    // 8. 取消 → {nodes, run}，运行与未终态节点都变 cancelled
+    const cancelled = await call('POST', `/api/workflow-runs/${runId}/cancel`);
+    expectStatus(cancelled, { label: 'POST /api/workflow-runs/:runId/cancel', status: 200 });
+    expectTopLevelKeys(cancelled, ['nodes', 'run'], 'POST /api/workflow-runs/:runId/cancel');
+    checkShape(cancelled.body.run, RUN_CONTRACT, '取消 → run', problems);
+    assert.equal(cancelled.body.run.status, 'cancelled', '取消后运行应为 cancelled');
+    assert.ok(
+      cancelled.body.nodes.every((node) => node.status === 'cancelled'),
+      '取消后未终态节点应全部变 cancelled'
+    );
+
+    // 9. 对已终态的运行再次取消 → 幂等，仍是 200 且状态不变
+    const cancelledAgain = await call('POST', `/api/workflow-runs/${runId}/cancel`);
+    expectStatus(cancelledAgain, { label: '重复 cancel', status: 200 });
+    assert.equal(cancelledAgain.body.run.status, 'cancelled', '重复取消不应改变状态');
+
+    // 10. 取消后重试 → {nodes, resetNodeIds, run}，节点重置为 pending
+    const retried = await call('POST', `/api/workflow-runs/${runId}/retry`);
+    expectStatus(retried, { label: 'POST /api/workflow-runs/:runId/retry', status: 200 });
+    expectTopLevelKeys(retried, ['nodes', 'resetNodeIds', 'run'], 'POST /api/workflow-runs/:runId/retry');
+    checkShape(retried.body.run, RUN_CONTRACT, 'retry → run', problems);
+    assert.equal(retried.body.run.status, 'queued', '重试后运行应回到 queued');
+    assert.deepEqual(retried.body.resetNodeIds, ['contract-text'], 'resetNodeIds 应列出被重置的节点');
+    assert.ok(
+      retried.body.nodes.every((node) => node.status === 'pending'),
+      '重试后失败/取消的节点应重置为 pending'
+    );
+
+    // 11. 错误响应形状：单字段 error，且不泄露不存在的运行
+    const missing = await call('GET', '/api/workflow-runs/does-not-exist');
+    expectStatus(missing, { label: 'GET 不存在的运行', status: 404 });
+    expectTopLevelKeys(missing, ['error'], 'GET 不存在的运行');
+    assert.equal(typeof missing.body.error, 'string', '错误响应的 error 应是字符串');
+
+    const missingWorkflowId = await call('POST', '/api/workflow-runs', {});
+    expectStatus(missingWorkflowId, { label: '缺 workflowId 的提交', status: 400 });
+    expectTopLevelKeys(missingWorkflowId, ['error'], '缺 workflowId 的提交');
+    assert.equal(missingWorkflowId.body.error, 'workflowId is required.', '400 应回具体原因');
+
+    assert.deepEqual(
+      problems,
+      [],
+      `写端点契约不一致：\n  - ${problems.join('\n  - ')}\n\n` +
+      '处理方式：要么改后端返回，要么同步更新本文件的契约表与 docs/workflow-run-api.md。'
+    );
+  } finally {
+    await closeServer(server);
+    await runtime.stop();
+  }
+});

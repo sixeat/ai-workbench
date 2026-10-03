@@ -359,7 +359,7 @@ failed | cancelled ──retry────────────→ pending
 | 2 | **`cancelled` 无法区分「主动取消」与「上游拖死」** | 只能匹配 `error.message` 文案 | 落库为真正的 `blocked`（枚举已存在，无需改 schema），或给 `error` 加稳定 `code` |
 | 3 | **`running` 节点状态永不出现** | UI 若等 `running` 会一直显示「未开始」 | 前端按 `queued` 显示「已提交/等待上游」；后端考虑是否补写 `running` |
 | 4 | **错误响应无结构化 code** | 只有 `{error: "<字符串>"}` | 至少给可预期的 4xx 加 `code` 字段 |
-| 5 | **写端点响应契约测试缺失** | `apiContract.test.cjs` 只覆盖 13 个读端点 | 阶段 0 交付项：补 `POST /api/workflow-runs` 等 |
+| 5 | ~~写端点响应契约测试缺失~~ **已补齐** | `apiContract.test.cjs` 新增「工作流运行写端点」测试：201/200 幂等、详情、计划、409、取消与重试 | 无需决策 |
 
 ---
 

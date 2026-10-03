@@ -32,7 +32,7 @@
 
 任一方向不一致即测试失败，并直接给出处理建议。
 
-### 1.1 当前覆盖范围（13 个端点）
+### 1.1 当前覆盖范围（13 个读端点 + 1 条写路径生命周期）
 
 | 端点 | 验证内容 |
 | --- | --- |
@@ -50,9 +50,28 @@
 | `GET /api/model-capability-presets` | `{presets}` |
 | `GET /api/asset-collections` | `{collections, count}` |
 
-**注意覆盖范围有限**：94 个路由里只验证了 13 个（读端点）。**写端点（POST / PATCH / PUT）的响应形状尚未纳入自动检查**——这是当前最大的契约盲区。
+**注意覆盖范围有限**：94 个路由里，读端点验证了 13 个；写路径另有一条**运行全生命周期**检查（见 1.2），其余写端点（POST / PATCH / PUT）仍未纳入自动检查——这仍是当前最大的契约盲区。
 
-### 1.2 如何扩充
+### 1.2 写端点：工作流运行生命周期
+
+读端点表之外，还有一个独立测试覆盖**会改数据**的路径。之所以要单独补：写端点的响应形状
+过去完全没有检查，而它正是前端「保存工作流 / 提交运行」链路被打断的地方——§3.8 就曾把
+`POST /api/workflow-runs` 的响应写成 `{run, nodes}`，实际是 `{created, run}`。
+
+它按顺序核对整条链路（`startWorkers:false`，状态确定，不依赖时间）：
+
+1. `POST /api/workflows` → **201** + `{workflow}`（先建一张最小工作流）
+2. `POST /api/workflow-runs` → **201** + `{created:true, run}`；同键重复提交 → **200** + `created:false`，且返回同一个运行
+3. `GET /api/workflow-runs/:runId` → `{run, nodes}`，节点 `nodeId` 回指工作流图里的节点
+4. `GET /api/workflow-runs/:runId/plan` → `{plan, runId, status}`
+5. `GET /api/workflow-runs` → `{runs, count, total, limit, offset}`
+6. 运行进行中 `retry` → **409**
+7. `cancel` → `{nodes, run}`；重复 `cancel` 幂等；`retry` 后节点重置为 `pending`
+8. 错误响应恒为单字段 `{error}`；不存在或越权一律 **404**
+
+各端点的完整字段与状态机见[服务端工作流运行 API 契约](workflow-run-api.md)。
+
+### 1.3 如何扩充
 
 在 `server/apiContract.test.cjs` 里加一条即可：
 
@@ -332,4 +351,4 @@ POST /api/workflow-runs
 | 无版本号 | 全部 `/api/*`，无 `/api/v1` | 破坏性变更时靠新增端点而非改语义；如需版本化，宜在重写前端时一并规划 |
 | 集合响应字段不齐 | 多数用 `count`，`/api/credits/transactions` 用 `total`，部分两者都有 | 新实现按端点实际字段取值，勿假设统一 |
 | 无 OpenAPI 定义 | 本文档 + `apiContract.test.cjs` 是目前唯一的机器可读契约来源 | 可考虑从两者生成 OpenAPI，用于自动产出前端类型 |
-| 写端点未纳入自动检查 | 检查只覆盖读端点 | 逐步补齐，优先补工作流与资产的写路径 |
+| 写端点覆盖不全 | 读端点 13 个已覆盖；写路径只有「工作流运行生命周期」有检查 | 继续补：工作流保存（`PUT /api/workflows/:id`）、资产集合、API Key 等写路径 |
