@@ -276,16 +276,18 @@ UNDECLARED_FIELD_CONTRACT['GET /api/tasks/:taskId'] = ['task'];
 
 ### 3.8 服务端工作流运行（6）
 
-**需要 `WORKBENCH_SERVER_SIDE_RUNS=true` 才启用**（默认关闭，老部署行为不变）。
+路由**无条件注册**；但推进运行的 worker 需要 `WORKBENCH_SERVER_SIDE_RUNS=true`（默认关闭）才会启动。
+开关关闭时 `POST` 依然返回 201，运行会一直停在 `queued`。字段形状、状态机、幂等与断线恢复
+规则见[服务端工作流运行 API 契约](workflow-run-api.md)。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `GET` | `/api/workflow-runs` | 列出运行 `{runs, count}` |
-| `POST` | `/api/workflow-runs` | 提交运行，返回 **201** + `{run, nodes}` |
+| `GET` | `/api/workflow-runs` | 列出运行 `{runs, count, total, limit, offset}` |
+| `POST` | `/api/workflow-runs` | 提交运行：**201** + `{created, run}`；幂等命中时 **200** + `created:false` |
 | `GET` | `/api/workflow-runs/:runId` | 查询运行与各节点状态 `{run, nodes}` |
-| `GET` | `/api/workflow-runs/:runId/plan` | 查看推进计划（哪些节点就绪/被阻塞） |
-| `POST` | `/api/workflow-runs/:runId/cancel` | 取消运行（软取消） |
-| `POST` | `/api/workflow-runs/:runId/retry` | 重跑失败节点（不消耗 `attempt`） |
+| `GET` | `/api/workflow-runs/:runId/plan` | 查看推进计划（哪些节点就绪/被阻塞），只读 |
+| `POST` | `/api/workflow-runs/:runId/cancel` | 取消运行（软取消；对已终态的运行幂等） |
+| `POST` | `/api/workflow-runs/:runId/retry` | 重跑失败/取消的节点，重置为 `pending`（`attempt` 在真正入队时才 +1） |
 
 提交运行：
 

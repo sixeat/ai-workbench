@@ -106,6 +106,7 @@ flowchart LR
 | [API 设计](docs/api-design-v2.md) | 后端 API 和数据结构设计 |
 | [工作流执行语义](docs/workflow-execution-semantics.md) | 端口值类型、连线推断、22 种节点契约、执行顺序、指纹复用与校验规则 |
 | [API 契约](docs/api-contract.md) | 94 个路由清单、全局响应约定、鉴权模型与自动化契约检查说明 |
+| [工作流运行 API 契约](docs/workflow-run-api.md) | 服务端运行的 6 个接口字段、运行/节点状态机、幂等与断线恢复规则（前端接入必读） |
 | [节点清单（JSON）](docs/node-registry.json) | 机器可读的 22 种节点定义：端口、配色、配置字段、connection 规则。重写前端时作为陈设依据，`npm run export:node-registry` 重新生成 |
 | [流水线与 SaaS 落地方案](docs/pipeline-saas-roadmap.md) | 服务端工作流编排、积分定价、运维兜底、商业化与扩容的分阶段方案 |
 
