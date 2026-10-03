@@ -18,8 +18,11 @@
 
 ```bash
 npm install
-npm run dev
+npm start
 ```
+
+> ⚠️ 旧的 `npm run dev` 已不存在：它原是 `concurrently` 同时起后端和 Vite，
+> 随内嵌的旧前端一起移除了。现在后端只起自己，前端在 `../frontend` 单独起。
 
 本地 `.env` 可以这样写：
 
@@ -39,12 +42,49 @@ WORKBENCH_EMAIL_DEV_CODE_VISIBLE=true
 WORKBENCH_DATA_DIR=./data
 WORKBENCH_DB_PATH=./data/ai-workbench.sqlite
 IMAGE_OUTPUT_DIR=./outputs
+
+# 前端联调要跑「正式工作流运行」时必须打开。
+# 默认关闭，而路由是无条件注册的：关着时 POST /api/workflow-runs 返回 201，
+# 运行却永远停在 queued 且不报错。启动横幅会打印实际状态。
+WORKBENCH_SERVER_SIDE_RUNS=true
 ```
 
 本地开发时，Vite 会把浏览器里的 `/api/*` 代理到本地 Node 后端。`VITE_PROXY_URL` 留空即可。
 
 > [!WARNING]
 > 本地开发配置不能直接放到公网。`WORKBENCH_EMAIL_DEV_CODE_VISIBLE=true` 会把验证码返回给前端，只适合开发。
+
+### 前端联调清单
+
+前端是独立仓库（`../frontend`），联调时两个终端各起一个：
+
+```bash
+# 终端 1：后端
+npm start                      # http://127.0.0.1:3000
+
+# 终端 2：前端
+cd ../frontend && npm run dev  # Vite，默认 http://127.0.0.1:5173
+```
+
+| 项 | 值 | 说明 |
+| --- | --- | --- |
+| 后端地址 | `http://127.0.0.1:3000` | local 模式默认绑 `127.0.0.1` |
+| 前端地址 | `http://127.0.0.1:5173` | Vite 默认端口，实际以 `../frontend` 为准 |
+| 接口前缀 | `/api/*` | 前端 dev server 代理到后端，因此**同源，不需要配 CORS** |
+| `VITE_PROXY_URL` | 留空 | 留空走 dev server 代理；只有分离部署才填后端 origin |
+| 工作流运行 | `WORKBENCH_SERVER_SIDE_RUNS=true` | **默认关闭**，必须显式打开 |
+
+联调前自检三条，每条都能挡住一类静默失败：
+
+1. `curl http://127.0.0.1:3000/api/health` → **200**，且 `deploymentMode` 为 `local`。
+2. 后端启动横幅里 `Server-side workflow runs:` 必须是 **enabled**。若是 `disabled`，
+   提交运行会返回 **201** 却永远停在 `queued`——没有报错，最难查。
+3. 登录能用：local 模式与服务器模式一样要求登录；没配 SMTP 时用
+   `WORKBENCH_EMAIL_DEV_MODE=true` + `WORKBENCH_EMAIL_DEV_CODE_VISIBLE=true` 拿验证码。
+
+> 视频节点在服务端运行下会长时间停在 `queued`（实测 11~19 分钟），这是正常的，
+> 不要按前端超时判失败。接口字段、状态机、幂等与断线恢复见
+> [服务端工作流运行 API 契约](workflow-run-api.md)。
 
 ## 模式二：单机服务器
 
@@ -97,14 +137,15 @@ WORKBENCH_DB_PATH=/home/admin/apps/ai-workbench-data/data/ai-workbench.sqlite
 IMAGE_OUTPUT_DIR=/home/admin/apps/ai-workbench-data/outputs
 ```
 
-前端构建：
+前端构建（在 `../frontend` 里做，后端本身没有构建步骤）：
 
 ```bash
+cd ../frontend
 VITE_PROXY_URL=https://api.example.com
 npm run build
 ```
 
-然后把 `dist` 交给 Nginx、OSS、Vercel 或 CDN。
+然后把前端产出的 `dist` 交给 Nginx、OSS、Vercel 或 CDN。
 
 ## 模式三：API 和 Worker 分进程
 
@@ -162,8 +203,11 @@ pm2 save
 本地开发重点验证：
 
 ```bash
-npm run dev
+npm start
+curl http://127.0.0.1:3000/api/health     # 期望 200
 ```
+
+启动横幅里 `Server-side workflow runs:` 要与预期一致——前端联调时需要是 `enabled`。
 
 服务器部署重点验证：
 
@@ -172,14 +216,14 @@ npm run check:deploy
 curl http://127.0.0.1:3000/api/health
 ```
 
-代码回归重点验证：
+代码回归重点验证（后端没有构建步骤，前端构建见模式二）：
 
 ```bash
-npm run check:mojibake
 npm test
-npx tsc -b --pretty false
 npm run lint
-npm run build
+npm run check:types          # tsc -b，只覆盖 src/ 的节点定义源头
+npm run check:routes         # 路由清单与 api-contract.md 一致
+npm run check:mojibake
 ```
 
 ## 常见误区

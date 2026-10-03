@@ -117,7 +117,7 @@
 | 前后端分离 URL 防配反 | 部署检查会拒绝把 `WORKBENCH_CORS_ORIGIN` 配成后端 API 域名 |
 | 前后端分离 URL 格式防错 | 部署检查会拒绝把 `VITE_PROXY_URL`、`WORKBENCH_CORS_ORIGIN`、`WORKBENCH_PUBLIC_BASE_URL` 写成带 `/api`、路径、query 或 hash 的地址 |
 | 前后端分离运行时护栏 | `server/appSplitDeployment.test.cjs` 会验证 API-only 模式、公开健康检查最小化、CORS 凭证头和跨域登录 Cookie |
-| 本地开发地址固定 | `npm run dev:web` 和 Vite dev server 默认监听 `127.0.0.1`，减少 `localhost`/IPv6/旧进程混用导致的登录页错位 |
+| 本地开发地址固定 | Vite dev server 默认监听 `127.0.0.1`（该脚本随前端移到 `../frontend`），减少 `localhost`/IPv6/旧进程混用导致的登录页错位 |
 | 管理员入口部署提醒 | 部署检查会在没有 bootstrap admin 或 `WORKBENCH_ADMIN_TOKEN` 时提醒确认已有管理员，避免首次部署后进不了后台 |
 | 健康检查路由拆分 | `/api/health` 和 `/api/admin/health` 独立，公开接口不暴露路径 |
 | 通用限流服务拆分 | 默认不信任 `X-Forwarded-For`，只在显式开启代理信任时使用代理 IP |

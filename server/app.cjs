@@ -373,6 +373,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
       deploymentMode: deployment,
       distDir,
       enableSyncGeneration,
+      enableWorkflowRuns: workflowRunEnabled,
       host,
       outputDir: OUTPUT_DIR,
       port,

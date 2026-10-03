@@ -84,3 +84,29 @@ test('app factory can force local worker startup from options', async () => {
     await runtime.stop();
   }
 });
+
+test('app factory reports the server-side workflow run switch in config', async () => {
+  const baseEnv = {
+    ...process.env,
+    WORKBENCH_DEPLOYMENT_MODE: 'local',
+    WORKBENCH_REQUIRE_LOGIN: 'false',
+    WORKBENCH_START_WORKERS: 'false',
+  };
+  const disabled = createWorkbenchApp({
+    env: { ...baseEnv, WORKBENCH_SERVER_SIDE_RUNS: 'false' },
+  });
+  const enabled = createWorkbenchApp({
+    env: { ...baseEnv, WORKBENCH_SERVER_SIDE_RUNS: 'true' },
+  });
+
+  try {
+    // 这个值会打到启动横幅上。它必须如实反映开关，因为关着的时候
+    // /api/workflow-runs 照样接受提交、运行却永远不推进——
+    // 启动横幅是唯一不用发请求就能看出问题的地方。
+    assert.equal(disabled.config.enableWorkflowRuns, false);
+    assert.equal(enabled.config.enableWorkflowRuns, true);
+  } finally {
+    await disabled.stop();
+    await enabled.stop();
+  }
+});

@@ -34,6 +34,9 @@ function printStartup() {
   console.log(`  Assets will be saved to ${config.outputDir}`);
   console.log(`  Static frontend: ${config.serveStatic ? config.distDir : 'disabled'}`);
   console.log(`  Sync generation endpoints: ${config.enableSyncGeneration ? 'enabled' : 'disabled'}`);
+  // 这个开关默认关闭，而 /api/workflow-runs 的路由是无条件注册的：关着的时候
+  // 提交运行会返回 201 然后永远不推进。启动时打出来，免得排查半天。
+  console.log(`  Server-side workflow runs: ${config.enableWorkflowRuns ? 'enabled' : 'disabled'}`);
   console.log(`  Local workers: ${config.startWorkers ? 'enabled' : 'disabled'}`);
   console.log('');
 }

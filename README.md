@@ -6,12 +6,16 @@ AI Workbench 是一个 API 驱动的可视化 AI 创作工作台。
 
 ## 5 分钟版
 
-本地开发：
+本项目是**纯后端**，前端在 `../frontend`（独立仓库）。本地起后端：
 
 ```bash
 npm install
-npm run dev
+cp .env.example .env   # 首次；把 WORKBENCH_DEPLOYMENT_MODE 设为 local
+npm start              # http://127.0.0.1:3000
 ```
+
+> ⚠️ 旧文档里的 `npm run dev` 已经不存在了——它随内嵌的旧前端一起被移除，
+> 前端现在有自己的 dev server，见下面「前端联调」。
 
 服务器默认用单进程 SaaS 模式：
 
@@ -24,17 +28,25 @@ npm run start:server
 
 正式服务器推荐前端静态托管、后端只提供 API。具体配置见 [部署模式清单](docs/deployment-modes.md)。
 
-本地开发打开：
+### 前端联调
 
-```text
-http://127.0.0.1:5173
-```
-
-如果已经构建过，后续只启动服务：
+两个终端：
 
 ```bash
+# 终端 1：后端
 npm start
+
+# 终端 2：前端（独立仓库）
+cd ../frontend && npm run dev    # Vite，默认 http://127.0.0.1:5173
 ```
+
+前端 dev server 会把 `/api/*` 代理到后端，登录 cookie 因此是同源的，`VITE_PROXY_URL` 留空即可。要把正式工作流运行接进来，`.env` 里加：
+
+```bash
+WORKBENCH_SERVER_SIDE_RUNS=true
+```
+
+它**默认关闭**。关着的时候 `POST /api/workflow-runs` 照样返回 **201**，但运行会一直停在 `queued`、不报任何错——前端会看到「提交成功但永远不跑」。启动横幅会打印实际状态，看到 `Server-side workflow runs: disabled` 就是这个情况。完整清单见[部署模式](docs/deployment-modes.md)的「前端联调」一节。
 
 ## 核心功能
 
@@ -124,7 +136,7 @@ npm run start:server # 先跑部署检查再启动
 检查：
 
 ```bash
-npm test             # 595 测试
+npm test             # 596 测试
 npm run lint         # 期望 0 警告
 npm run check:types  # src/ 下节点注册表源头的类型检查（tsc -b）
 npm run check:routes # docs/api-contract.md 路由清单与后端实际注册是否一致
