@@ -46,10 +46,10 @@ npm --version    # 应显示 9.x 或更高
 
 ## 启动项目
 
-### 1. 进入项目目录
+### 1. 进入后端目录
 
 ```bash
-cd F:\API_ui\工作台\ai-workbench
+cd backend        # 相对项目根目录；本项目是后端，前端在 ../frontend
 ```
 
 ### 2. 安装依赖（首次运行）
