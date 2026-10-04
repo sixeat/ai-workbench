@@ -6,7 +6,7 @@
 
 ---
 
-## 零、先读这一条：默认不推进 ⚠️
+## 零、先读这一条：功能开关默认关闭 ⚠️
 
 这是接入前必须知道的**唯一前提**，否则会得到「提交成功但永远不跑」。
 
@@ -15,9 +15,20 @@
 | 6 个运行路由**无条件注册** | `server/routes/workflowRunRoutes.cjs` |
 | 推进运行的 worker 需要 `WORKBENCH_SERVER_SIDE_RUNS=true` 才启动 | `server/app.cjs:254`、`server/workers/workflowRunWorker.cjs:219` |
 | 该开关**默认 false** | `parseBoolean(env.WORKBENCH_SERVER_SIDE_RUNS, false)` |
+| 开关关闭时 `POST` 直接返回 **503**，不创建运行 | `server/routes/workflowRunRoutes.cjs` |
 
-**默认配置下的实际表现**：`POST /api/workflow-runs` 返回 **201**，然后运行永远停在
-`status: "queued"`、所有节点永远停在 `status: "pending"`，**不返回任何错误**。
+**开关关闭时的表现**（2026-10-03 起）：
+
+```json
+503 { "error": "Server-side workflow runs are disabled on this server. Set WORKBENCH_SERVER_SIDE_RUNS=true to enable them." }
+```
+
+护栏在查库之前，所以即使 `workflowId` 不存在也会先返回 503 而不是 404。
+文案里直接给出打开方式——这是刻意的，免得运维回头翻源码。
+
+> 在此之前的行为是「返回 201，然后运行永远停在 `queued`、不报任何错」，静默且难查。
+> 决策记录：**只在功能开关关闭时拒绝；不看本进程有没有跑 worker**，
+> 因为分进程部署下 API 进程本来就是 `WORKBENCH_START_WORKERS=false`（见第八节第 1 项）。
 
 启用方式：
 
@@ -25,8 +36,7 @@
 WORKBENCH_SERVER_SIDE_RUNS=true
 ```
 
-> 阶段 0 待决策：是否在 worker 未启用时直接拒绝创建（见第八节）。
-> 在那之前，前端接入联调**必须**先确认后端这个开关是打开的。
+启动横幅会打印实际状态（`Server-side workflow runs: enabled|disabled`），不用发请求就能确认。
 
 ### 分进程部署（模式三）目前跑不了 ⚠️
 
@@ -163,12 +173,16 @@ WORKBENCH_SERVER_SIDE_RUNS=true
 
 | 状态 | `error` | 触发条件 |
 | --- | --- | --- |
+| 503 | `Server-side workflow runs are disabled on this server. Set WORKBENCH_SERVER_SIDE_RUNS=true to enable them.` | 功能开关关闭。**最先判断**，优先于下面的 400/404 |
 | 400 | `workflowId is required.` | 缺 workflowId |
 | 400 | `Workflow has no nodes to run.` | 图里没有节点 |
 | 400 | `Workflow contains a cycle and cannot be executed.` | 存在循环依赖 |
 | 404 | `Workflow not found.` | 工作流不存在或不属于该用户 |
 | 404 | `Workflow version not found.` | 指定版本不存在 |
 | 500 | `Unable to create workflow run.` | 其它异常 |
+
+> 前端至少要把 **503** 与 400/404 分开处理：前者是部署配置问题（提示运维打开开关），
+> 后者是这次请求本身有问题（提示用户）。
 
 ### 3.3 `GET /api/workflow-runs/:runId` — 详情
 
@@ -370,7 +384,7 @@ failed | cancelled ──retry────────────→ pending
 
 | # | 问题 | 现状 | 建议 |
 | --- | --- | --- | --- |
-| 1 | **worker 未启用时静默不推进** | 返回 201，运行永远 `queued` | 创建时直接返回明确错误（如 503）；并在 `/api/health` 暴露该能力位 |
+| 1 | ~~worker 未启用时静默不推进~~ **已解决** | 开关关闭时 `POST /api/workflow-runs` 返回 **503** + 可操作文案，护栏在查库之前，不再出现「201 之后静默卡死」 | 前端把 503 与其他 4xx 分开提示即可；`/api/health` 暴露能力位仍未做（横幅已有） |
 | 2 | **`cancelled` 无法区分「主动取消」与「上游拖死」** | 只能匹配 `error.message` 文案 | 落库为真正的 `blocked`（枚举已存在，无需改 schema），或给 `error` 加稳定 `code` |
 | 3 | **`running` 节点状态永不出现** | UI 若等 `running` 会一直显示「未开始」 | 前端按 `queued` 显示「已提交/等待上游」；后端考虑是否补写 `running` |
 | 4 | **错误响应无结构化 code** | 只有 `{error: "<字符串>"}` | 至少给可预期的 4xx 加 `code` 字段 |

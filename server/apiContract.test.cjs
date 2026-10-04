@@ -317,6 +317,8 @@ test('工作流运行写端点响应形状与生命周期契约一致', async ()
       WORKBENCH_START_WORKERS: 'false',
       WORKBENCH_SERVE_STATIC: 'false',
       WORKBENCH_ADMIN_TOKEN: CONTRACT_ADMIN_TOKEN,
+      // 功能开关关着时创建会被拒绝（503），本测试要验的是成功路径的形状
+      WORKBENCH_SERVER_SIDE_RUNS: 'true',
     },
     startWorkers: false,
   });

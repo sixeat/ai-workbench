@@ -68,6 +68,7 @@
 6. 运行进行中 `retry` → **409**
 7. `cancel` → `{nodes, run}`；重复 `cancel` 幂等；`retry` 后节点重置为 `pending`
 8. 错误响应恒为单字段 `{error}`；不存在或越权一律 **404**
+9. `WORKBENCH_SERVER_SIDE_RUNS` 关闭时 `POST /api/workflow-runs` → **503**，且护栏在查库之前
 
 各端点的完整字段与状态机见[服务端工作流运行 API 契约](workflow-run-api.md)。
 
@@ -309,13 +310,13 @@ UNDECLARED_FIELD_CONTRACT['GET /api/tasks/:taskId'] = ['task'];
 ### 3.8 服务端工作流运行（6）
 
 路由**无条件注册**；但推进运行的 worker 需要 `WORKBENCH_SERVER_SIDE_RUNS=true`（默认关闭）才会启动。
-开关关闭时 `POST` 依然返回 201，运行会一直停在 `queued`。字段形状、状态机、幂等与断线恢复
-规则见[服务端工作流运行 API 契约](workflow-run-api.md)。
+开关关闭时 `POST` 直接返回 **503** + 打开方式（不再返回 201 后静默卡死）。字段形状、状态机、
+幂等与断线恢复规则见[服务端工作流运行 API 契约](workflow-run-api.md)。
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/workflow-runs` | 列出运行 `{runs, count, total, limit, offset}` |
-| `POST` | `/api/workflow-runs` | 提交运行：**201** + `{created, run}`；幂等命中时 **200** + `created:false` |
+| `POST` | `/api/workflow-runs` | 提交运行：**201** + `{created, run}`；幂等命中时 **200** + `created:false`；功能关闭时 **503** |
 | `GET` | `/api/workflow-runs/:runId` | 查询运行与各节点状态 `{run, nodes}` |
 | `GET` | `/api/workflow-runs/:runId/plan` | 查看推进计划（哪些节点就绪/被阻塞），只读 |
 | `POST` | `/api/workflow-runs/:runId/cancel` | 取消运行（软取消；对已终态的运行幂等） |

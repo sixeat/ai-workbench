@@ -10,6 +10,7 @@ function registerWorkflowRunRoutes(app, context) {
   const {
     getRequestUserId,
     workflowRunService,
+    workflowRunsEnabled = true,
   } = context;
 
   if (!workflowRunService) throw new Error('workflowRunService is required for workflow run routes.');
@@ -34,6 +35,21 @@ function registerWorkflowRunRoutes(app, context) {
 
   app.post('/api/workflow-runs', (req, res) => {
     try {
+      // 功能开关关着时，推进运行的 worker 根本没启动，创建出来的运行会永远停在
+      // queued、节点停在 pending，而且不报任何错。这里直接拒绝并给出可操作的文案。
+      //
+      // 刻意不用 sendSafeError：它对 5xx 会用路由的通用文案盖掉具体原因
+      // （见 httpErrors.cjs 的 exposedMessage 判断），而这条错误的价值全在文案里。
+      //
+      // 只按「功能开关」判断，不看本进程有没有跑 worker——分进程部署下 API 进程
+      // 本来就是 WORKBENCH_START_WORKERS=false，由另一个进程消费。
+      if (!workflowRunsEnabled) {
+        res.status(503).json({
+          error: 'Server-side workflow runs are disabled on this server. '
+            + 'Set WORKBENCH_SERVER_SIDE_RUNS=true to enable them.',
+        });
+        return;
+      }
       const userId = getRequestUserId(req);
       const body = req.body || {};
       const { created, run } = workflowRunService.createRun({

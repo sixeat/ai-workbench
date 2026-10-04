@@ -294,6 +294,7 @@ function createWorkbenchApp({ env = process.env, startWorkers } = {}) {
   registerWorkflowRunRoutes(app, {
     getRequestUserId,
     workflowRunService,
+    workflowRunsEnabled: workflowRunEnabled,
   });
 
   registerProviderRoutes(app);

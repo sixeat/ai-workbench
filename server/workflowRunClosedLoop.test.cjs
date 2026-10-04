@@ -139,3 +139,35 @@ test('最小闭环：提交运行后由 worker 自行推进到 succeeded，产�
     await runtime.stop();
   }
 });
+
+test('功能开关关着时拒绝创建（503），而不是返回 201 后静默卡死', async () => {
+  const runtime = createWorkbenchApp({
+    env: { ...process.env, WORKBENCH_SERVER_SIDE_RUNS: 'false' },
+    startWorkers: true,
+  });
+  const { server, baseUrl } = await listen(runtime.app);
+
+  try {
+    assert.equal(runtime.config.enableWorkflowRuns, false);
+
+    // 开关检查必须发生在查库之前：workflowId 是个不存在的值，
+    // 期望 503 而不是 404——否则就说明护栏被放到了业务流程后面。
+    const rejected = await call(baseUrl, 'POST', '/api/workflow-runs', {
+      idempotencyKey: 'disabled-1',
+      workflowId: 'no-such-workflow',
+    });
+    assert.equal(
+      rejected.status,
+      503,
+      `功能关闭时应拒绝创建，实际 ${rejected.status} ${JSON.stringify(rejected.body)}`
+    );
+    assert.match(
+      String(rejected.body.error),
+      /WORKBENCH_SERVER_SIDE_RUNS=true/,
+      '拒绝文案必须直接给出打开方式，否则运维还是要翻源码'
+    );
+  } finally {
+    await closeServer(server);
+    await runtime.stop();
+  }
+});
