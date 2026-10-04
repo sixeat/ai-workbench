@@ -151,6 +151,14 @@ npm run build
 
 为什么用它：当生成任务明显拖慢 API 响应时，再把 API 和 Worker 拆开。它不是第一版默认方案。
 
+> [!WARNING]
+> **服务端工作流运行在分进程模式下不会推进**，且与 `WORKBENCH_SERVER_SIDE_RUNS` 无关：
+> API 进程强制不启动 worker（`server/api.cjs:1`），而独立的 worker 进程没有装配运行
+> 推进器（`createWorkflowRunWorker` 只在 `server/app.cjs` 里被调用）。
+> 实测：两个进程同时运行，提交的运行仍停在 `queued`、节点停在 `pending`，无任何报错。
+> 需要正式工作流运行（`/api/workflow-runs`）时请用模式二单进程。详见
+> [服务端工作流运行 API 契约](workflow-run-api.md) 第零节。
+
 API 进程：
 
 ```bash

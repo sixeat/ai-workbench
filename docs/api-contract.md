@@ -71,7 +71,20 @@
 
 各端点的完整字段与状态机见[服务端工作流运行 API 契约](workflow-run-api.md)。
 
-### 1.3 如何扩充
+### 1.3 闭环测试：真实装配下能跑完
+
+上面两个测试都不覆盖「按环境变量装配 worker、走 HTTP 提交、运行自己跑完」这条真实路径：
+服务层测试不碰装配，worker 测试注入假的 `enqueueTask`，而形状测试故意不启动 worker。
+`server/workflowRunClosedLoop.test.cjs` 补的就是这条缝——它用真实 `createWorkbenchApp`
+（`WORKBENCH_SERVER_SIDE_RUNS=true` + 真实 worker）提交一条只含本地节点的运行，
+轮询到终态，断言运行与节点都到 `succeeded`、产物形状与前端单跑一致、且不产生任何上游任务。
+
+装配一旦写错（例如 `enabled` 传成恒 false），运行会静默停在 `queued`——只有这个测试会红。
+
+> ⚠️ 闭环只在**单进程**下成立。分进程部署（模式三）目前不推进运行，原因与开关无关，
+> 见[服务端工作流运行 API 契约](workflow-run-api.md)第零节。
+
+### 1.4 如何扩充
 
 在 `server/apiContract.test.cjs` 里加一条即可：
 

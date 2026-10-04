@@ -28,6 +28,21 @@ WORKBENCH_SERVER_SIDE_RUNS=true
 > 阶段 0 待决策：是否在 worker 未启用时直接拒绝创建（见第八节）。
 > 在那之前，前端接入联调**必须**先确认后端这个开关是打开的。
 
+### 分进程部署（模式三）目前跑不了 ⚠️
+
+**单进程**（`npm start` / `npm run start:server`）下开关打开即可闭环推进。
+但模式三（`start:api` + `start:worker`）**不行，且与开关无关**：
+
+| 事实 | 出处 |
+| --- | --- |
+| `start:api` 强制 `WORKBENCH_START_WORKERS=false`，运行 worker 因此不启动 | `server/api.cjs:1`、`server/app.cjs:283` |
+| 独立的 worker 进程**根本没有装配**运行推进器 | `createWorkflowRunWorker` 全仓只在 `server/app.cjs` 被调用；`server/worker.cjs` 走 `workerRuntime.cjs`，其中不含它 |
+
+**实测**：API 进程与独立 worker 进程**同时运行**，提交一条只含 `textInput` 的运行，
+8 秒后仍是 `run=queued` / `node=pending`；同一张图在单进程下 300ms 内 `succeeded`。
+
+结论：**前端联调请用单进程**。分进程支持属于后续工作（见第八节第 6 项），不是配置问题。
+
 ---
 
 ## 一、身份与隔离
@@ -360,6 +375,7 @@ failed | cancelled ──retry────────────→ pending
 | 3 | **`running` 节点状态永不出现** | UI 若等 `running` 会一直显示「未开始」 | 前端按 `queued` 显示「已提交/等待上游」；后端考虑是否补写 `running` |
 | 4 | **错误响应无结构化 code** | 只有 `{error: "<字符串>"}` | 至少给可预期的 4xx 加 `code` 字段 |
 | 5 | ~~写端点响应契约测试缺失~~ **已补齐** | `apiContract.test.cjs` 新增「工作流运行写端点」测试：201/200 幂等、详情、计划、409、取消与重试 | 无需决策 |
+| 6 | **分进程部署下运行不推进** | API 进程不启动 worker（`api.cjs:1`），独立的 worker 进程没有装配运行推进器。实测两进程同跑仍停在 `queued` | 把推进器接进 `workerRuntime.cjs`——需要先把入队装配从 `app.cjs` 提取成可复用模块；在那之前用单进程（模式二） |
 
 ---
 

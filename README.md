@@ -136,7 +136,7 @@ npm run start:server # 先跑部署检查再启动
 检查：
 
 ```bash
-npm test             # 596 测试
+npm test             # 597 测试
 npm run lint         # 期望 0 警告
 npm run check:types  # src/ 下节点注册表源头的类型检查（tsc -b）
 npm run check:routes # docs/api-contract.md 路由清单与后端实际注册是否一致
